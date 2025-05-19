@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Device Tree overlay for GDEY037T03 E-Ink display connected via SPI
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/bcm2835.h>
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "spi0/spidev@0";
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@1 {
+        	target = <&gpio>;
+        	__overlay__ {
+            		epaper_pins: epaper_pins {
+                		brcm,pins = <7 13 9>; // DC, Reset, Busy
+                		brcm,function = <1 1 0>; // gpio in
+                		brcm,pull = <0 0 2>; // No pull for DC/Reset (outputs), pull-up for Busy (input)
+            		};
+        	};
+    	};
+
+	fragment@2 {
+		target = <&spi0>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			gdey037t03: gdey037t03@0 {
+				compatible = "gooddisplay,gdey037t03";
+				reg = <0>;
+				spi-max-frequency = <4000000>;
+				/* GPIO connections */
+				reset-gpios = <&gpio 13 GPIO_ACTIVE_HIGH>;  /* Reset pin */
+				dc-gpios = <&gpio 7 GPIO_ACTIVE_HIGH>;    /* DC pin (data/command) */
+				busy-gpios = <&gpio 9 GPIO_ACTIVE_LOW>;   /* Busy pin */
+				pinctrl-names = "default";
+                		pinctrl-0 = <&epaper_pins>;
+				status = "okay";
+			};
+		};
+	};
+}; 
+
