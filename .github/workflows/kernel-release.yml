@@ -53,6 +53,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required for creating releases
+    env:
+      NUM_JOBS: $(nproc)
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -75,32 +77,9 @@ jobs:
           sudo apt-get install -y build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ccache
           sudo apt-get install -y clang lld llvm llvm-dev
           sudo apt-get install -y bison flex libssl-dev libelf-dev
-          
-      - name: Install GitHub CLI
-        run: |
-          type -p curl >/dev/null || sudo apt install curl -y
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
-      
-      - name: Get latest release tag
-        id: get_latest_tag
-        run: |
-          # Get the latest tag or set a default if none exists
-          LATEST_TAG=$(gh release list --repo ${{ github.repository }} --limit 1 | grep -oP '^v\d{8}-.*?(?=\s)' || echo "v00000000-initial")
-          echo "Latest tag: $LATEST_TAG"
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          
-          # Extract kernel version from the latest tag (if possible)
-          if [[ "$LATEST_TAG" =~ -([0-9]+\.[0-9]+\.[0-9]+)- ]]; then
-            KERNEL_VERSION="${BASH_REMATCH[1]}"
-            echo "Extracted kernel version: $KERNEL_VERSION"
-            echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
-          fi
       
       - name: Build kernel
+        id: build_kernel
         run: |
           # Make scripts executable
           chmod +x scripts/kernel-build
@@ -122,39 +101,124 @@ jobs:
             VERSION_SUFFIX_OPTION="--version-suffix $VERSION_SUFFIX"
           fi
           
-          ./scripts/kernel-build --mode $BUILD_MODE -v $CLEAN_OPTION $VERSION_SUFFIX_OPTION
-      
-      - name: Create GitHub release
+          ./scripts/kernel-build --mode $BUILD_MODE -v $CLEAN_OPTION $VERSION_SUFFIX_OPTION -j$NUM_JOBS
+          
+          # Find the generated kernel tarball
+          TARBALL=$(find . -maxdepth 1 -name "pamir-ai-kernel-*.tar.gz" -type f -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d' ' -f2-)
+          echo "KERNEL_TARBALL=${TARBALL}" >> $GITHUB_ENV
+          
+          # Extract version from tarball name
+          TARBALL_NAME=$(basename "${TARBALL}")
+          if [[ "${TARBALL_NAME}" =~ pamir-ai-kernel-(.*)\.tar\.gz ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            echo "KERNEL_VERSION=${VERSION}" >> $GITHUB_ENV
+          else
+            echo "ERROR: Could not extract version from tarball name: ${TARBALL_NAME}"
+            exit 1
+          fi
+          
+          # Create kernel-install script for the release
+          if [ -f "scripts/kernel-install" ]; then
+            cp "scripts/kernel-install" "kernel-install"
+            chmod +x "kernel-install"
+            echo "INSTALLER_INCLUDED=true" >> $GITHUB_ENV
+          else
+            echo "WARNING: No kernel-install script found"
+            echo "INSTALLER_INCLUDED=false" >> $GITHUB_ENV
+          fi
+          
+      - name: Prepare release notes
+        id: release_notes
         run: |
-          # Make release script executable
-          chmod +x scripts/release-to-github
+          # Create release notes file
+          NOTES_FILE="release-notes.md"
           
-          # Set draft and prerelease options based on inputs or scheduled defaults
-          DRAFT_OPTION=""
-          if [ "${{ inputs.draft }}" == "true" ]; then
-            DRAFT_OPTION="--draft"
+          # Include kernel version info if available
+          if [[ -f "out/boot/kernel-version-info" ]]; then
+            echo "## Kernel Information" >> $NOTES_FILE
+            echo "" >> $NOTES_FILE
+            echo '```' >> $NOTES_FILE
+            cat "out/boot/kernel-version-info" >> $NOTES_FILE
+            echo '```' >> $NOTES_FILE
+            echo "" >> $NOTES_FILE
           fi
           
-          PRERELEASE_OPTION=""
-          if [ "${{ inputs.prerelease }}" == "true" ] || [ "$IS_PRERELEASE" == "true" ]; then
-            PRERELEASE_OPTION="--prerelease"
+          # Add changelog section if provided
+          if [[ -n "${{ inputs.changelog }}" || -n "$CHANGELOG_TEXT" ]]; then
+            echo "## Changelog" >> $NOTES_FILE
+            echo "" >> $NOTES_FILE
+            
+            if [[ -n "${{ inputs.changelog }}" ]]; then
+              echo "${{ inputs.changelog }}" >> $NOTES_FILE
+            elif [[ -n "$CHANGELOG_TEXT" ]]; then
+              echo "$CHANGELOG_TEXT" >> $NOTES_FILE
+            fi
+            echo "" >> $NOTES_FILE
           fi
           
-          # Set changelog if provided
-          CHANGELOG_OPTION=""
-          if [ -n "${{ inputs.changelog }}" ]; then
-            echo "${{ inputs.changelog }}" > CHANGELOG.md
-            CHANGELOG_OPTION="--changelog CHANGELOG.md"
-          elif [ -n "$CHANGELOG_TEXT" ]; then
-            echo "$CHANGELOG_TEXT" > CHANGELOG.md
-            CHANGELOG_OPTION="--changelog CHANGELOG.md"
-          fi
+          # Add standard installation instructions
+          echo "## Installation" >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
+          echo "### Option 1: Using the install script" >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
+          echo "1. Download both the tarball and kernel-install script" >> $NOTES_FILE
+          echo "2. Run the installer with root privileges:" >> $NOTES_FILE
+          echo '```' >> $NOTES_FILE
+          echo "sudo ./kernel-install pamir-ai-kernel-$KERNEL_VERSION.tar.gz" >> $NOTES_FILE
+          echo '```' >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
           
-          # Set custom tag if provided
-          TAG_OPTION=""
-          if [ -n "${{ inputs.custom_tag }}" ]; then
-            TAG_OPTION="--tag ${{ inputs.custom_tag }}"
-          fi
+          echo "### Option 2: Manual installation" >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
+          echo "1. Download the tarball" >> $NOTES_FILE
+          echo "2. Extract: \`tar -xzvf pamir-ai-kernel-$KERNEL_VERSION.tar.gz\`" >> $NOTES_FILE
+          echo "3. Copy files to your Raspberry Pi:" >> $NOTES_FILE
+          echo '```' >> $NOTES_FILE
+          echo "# Copy kernel and device tree files" >> $NOTES_FILE
+          echo "sudo cp -r out/boot/kernel*.img /boot/firmware/" >> $NOTES_FILE
+          echo "sudo cp -r out/boot/*.dtb /boot/firmware/" >> $NOTES_FILE
+          echo "sudo cp -r out/boot/overlays/*.dtbo /boot/firmware/overlays/" >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
+          echo "# Copy kernel modules" >> $NOTES_FILE
+          echo "sudo cp -r out/lib/modules/* /lib/modules/" >> $NOTES_FILE
+          echo '```' >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
+          echo "4. Reboot: \`sudo reboot\`" >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
           
-          # Run release script
-          ./scripts/release-to-github $DRAFT_OPTION $PRERELEASE_OPTION $CHANGELOG_OPTION $TAG_OPTION 
+          # Add build info
+          echo "## Build Information" >> $NOTES_FILE
+          echo "" >> $NOTES_FILE
+          echo "Built using the Pamir AI kernel build script." >> $NOTES_FILE
+          echo "Build date: $(date '+%Y-%m-%d %H:%M:%S')" >> $NOTES_FILE
+          echo "Build mode: ${{ inputs.build_mode || env.BUILD_MODE || 'lto' }}" >> $NOTES_FILE
+          
+          # Save release notes path
+          echo "NOTES_FILE=${NOTES_FILE}" >> $GITHUB_ENV
+          
+          # Generate tag name
+          if [[ -n "${{ inputs.custom_tag }}" ]]; then
+            TAG_NAME="${{ inputs.custom_tag }}"
+          else
+            # Default tag format: v<date>-<version>
+            TAG_NAME="v$(date +'%Y%m%d')-${KERNEL_VERSION}"
+          fi
+          echo "RELEASE_TAG=${TAG_NAME}" >> $GITHUB_ENV
+          
+          # Generate release title
+          RELEASE_TITLE="Pamir AI Kernel ${KERNEL_VERSION}"
+          echo "RELEASE_TITLE=${RELEASE_TITLE}" >> $GITHUB_ENV
+     
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TITLE }}
+          body_path: ${{ env.NOTES_FILE }}
+          draft: ${{ inputs.draft || env.IS_DRAFT == 'true' }}
+          prerelease: ${{ inputs.prerelease || env.IS_PRERELEASE == 'true' }}
+          files: |
+            ${{ env.KERNEL_TARBALL }}
+            ${{ env.INSTALLER_INCLUDED == 'true' && 'kernel-install' || '' }}
+          token: ${{ github.token }}
