@@ -417,6 +417,51 @@ Button events are reported through the Linux input subsystem and can be read fro
 
 LED status is exposed through the Linux LED class subsystem at `/sys/class/leds/pamir:status/`.
 
+## Debug and Troubleshooting
+
+### Debug Parameter
+
+The driver supports a `debug` module parameter to control logging verbosity:
+
+| Value | Level                | Description                                           |
+|-------|----------------------|-------------------------------------------------------|
+| 0     | `SAM_DEBUG_OFF`      | No debug messages (default)                           |
+| 1     | `SAM_DEBUG_ERROR`    | Error messages only                                   |
+| 2     | `SAM_DEBUG_INFO`     | Basic informational messages + errors                 |
+| 3     | `SAM_DEBUG_VERBOSE`  | Verbose debugging with detailed protocol information  |
+
+To enable debugging when loading the module, use:
+```
+sudo modprobe pamir-ai-sam debug=3
+```
+
+Or if built into the kernel, append to the kernel command line:
+```
+pamir-ai-sam.debug=3
+```
+
+### Common Issues and Solutions
+
+#### Communication Issues
+
+For communication problems between the driver and RP2040:
+
+1. Enable verbose logging:
+   ```
+   sudo rmmod pamir-ai-sam
+   sudo modprobe pamir-ai-sam debug=3
+   ```
+
+2. Look for checksum errors in the logs:
+   ```
+   dmesg | grep -i "checksum\|uart\|packet"
+   ```
+
+3. Verify that the correct UART is being used:
+   ```
+   dmesg | grep -i "serdev\|serial"
+   ```
+
 ## Example Usage
 
 ### Sending a Ping Command

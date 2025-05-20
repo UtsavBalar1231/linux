@@ -31,7 +31,15 @@ uint8_t calculate_checksum(const struct sam_protocol_packet *packet)
  */
 bool verify_checksum(const struct sam_protocol_packet *packet)
 {
-	return packet->checksum == calculate_checksum(packet);
+	uint8_t calculated = calculate_checksum(packet);
+	bool valid = (packet->checksum == calculated);
+	
+	if (!valid && packet->type_flags != 0) {  /* Avoid logging for all-zero packets */
+		pr_debug("SAM: Checksum verification failed: got 0x%02x, expected 0x%02x\n",
+			packet->checksum, calculated);
+	}
+	
+	return valid;
 }
 
 /**
@@ -51,12 +59,25 @@ int send_packet(struct sam_protocol_data *priv,
 	/* Calculate checksum */
 	packet->checksum = calculate_checksum(packet);
 
+	dev_dbg(&priv->serdev->dev, "Sending packet: type=0x%02x, data=[0x%02x,0x%02x], checksum=0x%02x\n",
+	     packet->type_flags, packet->data[0], packet->data[1], packet->checksum);
+
 	mutex_lock(&priv->tx_mutex);
 	ret = serdev_device_write(priv->serdev, (const unsigned char *)packet,
 			       PACKET_SIZE, MAX_SCHEDULE_TIMEOUT);
 	mutex_unlock(&priv->tx_mutex);
 
-	return (ret == PACKET_SIZE) ? 0 : -EIO;
+	if (ret != PACKET_SIZE) {
+		dev_err(&priv->serdev->dev, "Failed to send packet: wrote %d of %d bytes\n",
+		     ret, PACKET_SIZE);
+		return -EIO;
+	}
+	
+	if (priv->config.debug_level >= 3) {
+		dev_dbg(&priv->serdev->dev, "Packet sent successfully\n");
+	}
+
+	return 0;
 }
 
 /**
@@ -76,6 +97,9 @@ int send_led_command(struct sam_protocol_data *priv, uint8_t mode,
 		     uint8_t r, uint8_t g, uint8_t b, uint8_t value)
 {
 	struct sam_protocol_packet packet;
+
+	dev_dbg(&priv->serdev->dev, "Sending LED command: mode=0x%02x, r=%u, g=%u, b=%u, value=%u\n",
+	     mode, r, g, b, value);
 
 	packet.type_flags = TYPE_LED | mode;
 	packet.data[0] = ((r & 0x0F) << 4) | (g & 0x0F);
@@ -100,6 +124,9 @@ int send_system_command(struct sam_protocol_data *priv, uint8_t action,
 {
 	struct sam_protocol_packet packet;
 
+	dev_dbg(&priv->serdev->dev, "Sending system command: action=0x%02x, cmd=0x%02x, subcmd=0x%02x\n",
+	     action, command, subcommand);
+
 	packet.type_flags = TYPE_SYSTEM | (action & 0x1F);
 	packet.data[0] = command;
 	packet.data[1] = subcommand;
@@ -122,9 +149,12 @@ void process_packet(struct sam_protocol_data *priv,
 	/* Update statistics */
 	priv->packet_stats[type >> 5]++;
 
+	dev_dbg(&priv->serdev->dev, "Processing packet: type=0x%02x, data=[0x%02x,0x%02x], checksum=0x%02x\n",
+	     packet->type_flags, packet->data[0], packet->data[1], packet->checksum);
+
 	/* Verify checksum first */
 	if (!verify_checksum(packet)) {
-		dev_dbg(&priv->serdev->dev,
+		dev_warn(&priv->serdev->dev,
 	  "Invalid checksum: got 0x%02x, expected 0x%02x\n",
 	  packet->checksum, calculate_checksum(packet));
 		return;
@@ -133,34 +163,42 @@ void process_packet(struct sam_protocol_data *priv,
 	/* Process by type */
 	switch (type) {
 	case TYPE_BUTTON:
+		dev_dbg(&priv->serdev->dev, "Processing button packet\n");
 		process_button_packet(priv, packet);
 		break;
 
 	case TYPE_LED:
+		dev_dbg(&priv->serdev->dev, "Processing LED packet\n");
 		process_led_packet(priv, packet);
 		break;
 
 	case TYPE_POWER:
+		dev_dbg(&priv->serdev->dev, "Processing power packet\n");
 		process_power_packet(priv, packet);
 		break;
 
 	case TYPE_DISPLAY:
+		dev_dbg(&priv->serdev->dev, "Processing display packet\n");
 		process_display_packet(priv, packet);
 		break;
 
 	case TYPE_DEBUG_CODE:
+		dev_dbg(&priv->serdev->dev, "Processing debug code packet\n");
 		process_debug_code_packet(priv, packet);
 		break;
 
 	case TYPE_DEBUG_TEXT:
+		dev_dbg(&priv->serdev->dev, "Processing debug text packet\n");
 		process_debug_text_packet(priv, packet);
 		break;
 
 	case TYPE_SYSTEM:
+		dev_dbg(&priv->serdev->dev, "Processing system packet\n");
 		process_system_packet(priv, packet);
 		break;
 
 	case TYPE_RESERVED:
+		dev_dbg(&priv->serdev->dev, "Processing extended packet\n");
 		process_extended_packet(priv, packet);
 		break;
 
@@ -171,6 +209,8 @@ void process_packet(struct sam_protocol_data *priv,
 	}
 
 	/* Send acknowledgment if required */
-	if (priv->config.ack_required && type != TYPE_BUTTON)
+	if (priv->config.ack_required && type != TYPE_BUTTON) {
+		dev_dbg(&priv->serdev->dev, "Sending acknowledgment for packet\n");
 		send_system_command(priv, SYSTEM_PING, 0x00, 0x00);
+	}
 }

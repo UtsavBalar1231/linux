@@ -17,6 +17,7 @@
 #include <linux/kernel.h>
 #include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/serdev.h>
@@ -24,6 +25,12 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
+
+/* Debug levels */
+#define SAM_DEBUG_OFF     0  /* No debugging */
+#define SAM_DEBUG_ERROR   1  /* Errors only */
+#define SAM_DEBUG_INFO    2  /* Informational messages */
+#define SAM_DEBUG_VERBOSE 3  /* Verbose debugging */
 
 #define DEVICE_NAME "pamir-sam"
 #define MAX_DEVICES 1

@@ -9,6 +9,11 @@
  */
 #include "pamir-sam.h"
 
+/* Module parameters */
+static int debug = 0;
+module_param(debug, int, 0644);
+MODULE_PARM_DESC(debug, "Debug level (0=off, 1=error, 2=info, 3=verbose)");
+
 /**
  * sam_protocol_receive_buf() - Process received UART data
  * @serdev: Serial device
@@ -25,13 +30,19 @@ static size_t sam_protocol_receive_buf(struct serdev_device *serdev,
 	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
 	size_t i;
 
+	dev_dbg(&serdev->dev, "Received %zu bytes from UART\n", count);
+
 	for (i = 0; i < count; i++) {
 		/* Store byte in buffer */
-		if (priv->rx_pos < RX_BUF_SIZE)
+		if (priv->rx_pos < RX_BUF_SIZE) {
 			priv->rx_buf[priv->rx_pos++] = data[i];
+			dev_dbg(&serdev->dev, "Stored byte 0x%02x at position %zu\n", 
+				data[i], priv->rx_pos - 1);
+		}
 
 		/* Process packet when complete */
 		if (priv->rx_pos >= PACKET_SIZE) {
+			dev_dbg(&serdev->dev, "Processing complete packet\n");
 			process_packet(priv, (const struct sam_protocol_packet *)priv->rx_buf);
 			priv->rx_pos = 0;
 		}
@@ -51,14 +62,16 @@ static const struct serdev_device_ops sam_protocol_serdev_ops = {
  * sam_protocol_load_config() - Load driver configuration from device tree
  * @node: Device tree node
  * @config: Configuration structure to populate
+ * @serdev: Serial device for logging
  *
  * Read device tree properties to configure driver behavior.
  */
 static void sam_protocol_load_config(struct device_node *node,
-				      struct sam_protocol_config *config)
+				      struct sam_protocol_config *config,
+				      struct serdev_device *serdev)
 {
 	/* Set defaults */
-	config->debug_level = 1;
+	config->debug_level = debug; /* Use module parameter as default */
 	config->ack_required = false;
 	config->recovery_timeout_ms = 1000;
 
@@ -68,6 +81,9 @@ static void sam_protocol_load_config(struct device_node *node,
 			  &config->recovery_timeout_ms);
 
 	config->ack_required = of_property_read_bool(node, "ack-required");
+	
+	dev_info(&serdev->dev, "SAM driver configuration: debug=%d, ack=%d, timeout=%d ms\n",
+		config->debug_level, config->ack_required, config->recovery_timeout_ms);
 }
 
 /**
@@ -84,12 +100,16 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	struct input_dev *input_dev;
 	int ret;
 
+	dev_info(&serdev->dev, "Probing SAM protocol driver\n");
+
 	priv = devm_kzalloc(&serdev->dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
+	if (!priv) {
+		dev_err(&serdev->dev, "Failed to allocate memory for driver data\n");
 		return -ENOMEM;
+	}
 
 	/* Load configuration from device tree */
-	sam_protocol_load_config(serdev->dev.of_node, &priv->config);
+	sam_protocol_load_config(serdev->dev.of_node, &priv->config, serdev);
 
 	input_dev = devm_input_allocate_device(&serdev->dev);
 	if (!input_dev) {
@@ -104,6 +124,8 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	priv->debug_head = 0;
 	priv->debug_tail = 0;
 
+	/* Configure input device */
+	dev_dbg(&serdev->dev, "Configuring input device\n");
 	input_dev->name = "Pamir AI Signal Aggregation Module";
 	input_dev->id.bustype = BUS_RS232;
 	input_dev->id.vendor = 0x0001;
@@ -116,6 +138,7 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	__set_bit(KEY_ENTER, input_dev->keybit);
 	__set_bit(KEY_POWER, input_dev->keybit);
 
+	dev_dbg(&serdev->dev, "Registering input device\n");
 	ret = input_register_device(input_dev);
 	if (ret) {
 		dev_err(&serdev->dev, "Failed to register input device: %d\n",
@@ -124,6 +147,7 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	}
 
 	/* Set up LED class device */
+	dev_dbg(&serdev->dev, "Setting up LED class device\n");
 	pamir_led = devm_kzalloc(&serdev->dev, sizeof(struct led_classdev), GFP_KERNEL);
 	if (pamir_led) {
 		pamir_led->name = "pamir:status";
@@ -141,6 +165,7 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	serdev_device_set_drvdata(serdev, priv);
 	serdev_device_set_client_ops(serdev, &sam_protocol_serdev_ops);
 
+	dev_dbg(&serdev->dev, "Opening serial device\n");
 	ret = serdev_device_open(serdev);
 	if (ret) {
 		dev_err(&serdev->dev, "Failed to open serdev: %d\n", ret);
@@ -151,6 +176,7 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	serdev_device_set_baudrate(serdev, 115200);
 	serdev_device_set_flow_control(serdev, false);
 
+	dev_dbg(&serdev->dev, "Setting up character device\n");
 	ret = setup_char_device(priv);
 	if (ret < 0) {
 		dev_err(&serdev->dev, "Failed to set up char device: %d\n",
@@ -161,6 +187,7 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	}
 
 	/* Initialize work queue for deferred processing */
+	dev_dbg(&serdev->dev, "Creating workqueue\n");
 	priv->work_queue = create_singlethread_workqueue("sam_protocol_wq");
 	if (!priv->work_queue) {
 		dev_err(&serdev->dev, "Failed to create workqueue\n");
@@ -171,18 +198,21 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	}
 
 	/* Test communication by sending a ping */
+	dev_dbg(&serdev->dev, "Sending initial ping to test communication\n");
 	if (send_system_command(priv, SYSTEM_PING, 0, 0) == 0)
 		dev_info(&serdev->dev, "Initial communication test successful\n");
 	else
 		dev_warn(&serdev->dev, "Initial communication test failed\n");
 
 	/* Send boot notification to RP2040 */
+	dev_dbg(&serdev->dev, "Sending boot notification to RP2040\n");
 	if (send_boot_notification(priv) == 0)
 		dev_info(&serdev->dev, "Boot notification sent successfully\n");
 	else
 		dev_warn(&serdev->dev, "Failed to send boot notification\n");
 
 	/* Register shutdown notification handler */
+	dev_dbg(&serdev->dev, "Registering power handlers\n");
 	register_power_handlers(priv);
 
 	dev_info(&serdev->dev, "SAM protocol driver initialized and ready\n");
@@ -202,22 +232,31 @@ static void sam_protocol_remove(struct serdev_device *serdev)
 	dev_info(&serdev->dev, "Removing SAM protocol driver\n");
 
 	/* Unregister power notification handlers */
+	dev_dbg(&serdev->dev, "Unregistering power handlers\n");
 	unregister_power_handlers(priv);
 
 	/* Send shutdown notification */
+	dev_dbg(&serdev->dev, "Sending shutdown notification\n");
 	send_shutdown_notification(priv, 0);
 
-	if (priv->work_queue)
+	if (priv->work_queue) {
+		dev_dbg(&serdev->dev, "Destroying workqueue\n");
 		destroy_workqueue(priv->work_queue);
+	}
 
 	/* Send a system reset or shutdown command */
+	dev_dbg(&serdev->dev, "Sending system reset command\n");
 	send_system_command(priv, SYSTEM_RESET, 0, 0);
 
 	/* Clean up character device */
+	dev_dbg(&serdev->dev, "Cleaning up character device\n");
 	cleanup_char_device(priv);
 
+	dev_dbg(&serdev->dev, "Closing serial device\n");
 	serdev_device_close(serdev);
 	input_unregister_device(priv->input_dev);
+	
+	dev_info(&serdev->dev, "SAM protocol driver removed\n");
 }
 
 #ifdef CONFIG_OF
