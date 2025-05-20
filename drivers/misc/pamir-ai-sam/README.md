@@ -1,8 +1,8 @@
-# Pamir AI Sensor and Actuator Module (SAM) Protocol Documentation
+# Pamir AI Signal Aggregation Module (SAM) Protocol Documentation
 
 ## Overview
 
-The Pamir AI Sensor and Actuator Module (SAM) is a communication protocol used to interface between a Linux host system and the RP2040 microcontroller in Pamir AI CM5 devices. This protocol enables bidirectional communication for hardware control and status reporting via UART.
+The Pamir AI Signal Aggregation Module (SAM) is a communication protocol used to interface between a Linux host system and the RP2040 microcontroller in Pamir AI CM5 devices. This protocol enables bidirectional communication for hardware control and status reporting via UART.
 
 ## Architecture
 

@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/misc/pamir-ai,sam.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Pamir AI Ultra-Optimized UART Protocol Device
+title: Pamir AI Signal Aggregation Module (SAM)
 
 maintainers:
   - Pamir AI Team

@@ -1,8 +1,8 @@
 config PAMIR_AI_SAM_MODULE
-	tristate "Pamir AI Sensor and Actuator Module (SAM) driver"
+	tristate "Pamir AI Signal Aggregation Module (SAM) driver"
 	depends on SERIAL_DEV_BUS
 	help
-	  Say Y here to support Pamir AI's Sensor and Actuator Module (SAM)
+	  Say Y here to support Pamir AI's Signal Aggregation Module (SAM)
 	  for communication between the host processor and RP2040 microcontroller.
 	  
 	  This driver interfaces with hardware components on the CM5 device,
