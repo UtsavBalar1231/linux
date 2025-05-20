@@ -769,6 +769,7 @@ Add the following to your device tree to enable the SAM driver:
         debug-level = <1>;
         ack-required = <0>;
         recovery-timeout-ms = <1000>;
+        power-poll-interval-ms = <1000>;  /* Poll power metrics every 1000ms */
     };
 };
 ```

@@ -271,6 +271,9 @@ int register_power_handlers(struct sam_protocol_data *priv)
 	else
 		dev_info(&priv->serdev->dev, 
 			"Created power metrics sysfs interface\n");
+			
+	/* Start power metrics polling */
+	start_power_metrics_polling(priv);
 
 	return ret;
 }
@@ -284,6 +287,9 @@ int register_power_handlers(struct sam_protocol_data *priv)
 void unregister_power_handlers(struct sam_protocol_data *priv)
 {
 	if (g_power_priv) {
+		/* Stop power metrics polling */
+		stop_power_metrics_polling(priv);
+	
 		/* Remove sysfs interface */
 		sysfs_remove_group(&priv->serdev->dev.kobj, &sam_power_group);
 		
@@ -292,4 +298,89 @@ void unregister_power_handlers(struct sam_protocol_data *priv)
 		dev_dbg(&priv->serdev->dev,
 		   "Unregistered shutdown notification handler\n");
 	}
+}
+
+/**
+ * request_power_metrics() - Request power metrics from RP2040
+ * @priv: Private driver data
+ *
+ * Send a POWER_CMD_REQUEST_METRICS packet to request power metrics.
+ * The RP2040 will respond with current, battery, temperature, and voltage.
+ *
+ * Return: 0 on success, negative error code on failure
+ */
+int request_power_metrics(struct sam_protocol_data *priv)
+{
+	struct sam_protocol_packet packet;
+
+	dev_dbg(&priv->serdev->dev, "Requesting power metrics from RP2040\n");
+
+	packet.type_flags = TYPE_POWER | POWER_CMD_REQUEST_METRICS;
+	packet.data[0] = 0x00;  /* Reserved */
+	packet.data[1] = 0x00;  /* Reserved */
+
+	return send_packet(priv, &packet);
+}
+
+/**
+ * power_poll_timer_callback() - Timer callback for power metrics polling
+ * @timer: Timer list structure
+ *
+ * This function is called by the kernel timer subsystem to poll for power metrics.
+ */
+static void power_poll_timer_callback(struct timer_list *timer)
+{
+	struct sam_protocol_data *priv = from_timer(priv, timer, power_poll_timer);
+	
+	if (!priv || !priv->metrics_polling_enabled)
+		return;
+		
+	/* Request updated metrics from the RP2040 */
+	request_power_metrics(priv);
+	
+	/* Reschedule the timer */
+	if (priv->metrics_polling_enabled) {
+		unsigned long next_poll = msecs_to_jiffies(priv->config.power_poll_interval_ms);
+		mod_timer(&priv->power_poll_timer, jiffies + next_poll);
+	}
+}
+
+/**
+ * start_power_metrics_polling() - Start polling for power metrics
+ * @priv: Private driver data
+ *
+ * Initialize and start the timer for polling power metrics.
+ */
+void start_power_metrics_polling(struct sam_protocol_data *priv)
+{
+	if (!priv)
+		return;
+		
+	dev_info(&priv->serdev->dev, "Starting power metrics polling (interval: %d ms)\n",
+		 priv->config.power_poll_interval_ms);
+		 
+	/* Initialize the timer */
+	timer_setup(&priv->power_poll_timer, power_poll_timer_callback, 0);
+	
+	/* Start polling */
+	priv->metrics_polling_enabled = true;
+	mod_timer(&priv->power_poll_timer, 
+		  jiffies + msecs_to_jiffies(priv->config.power_poll_interval_ms));
+}
+
+/**
+ * stop_power_metrics_polling() - Stop polling for power metrics
+ * @priv: Private driver data
+ *
+ * Stop and delete the timer for polling power metrics.
+ */
+void stop_power_metrics_polling(struct sam_protocol_data *priv)
+{
+	if (!priv)
+		return;
+		
+	dev_info(&priv->serdev->dev, "Stopping power metrics polling\n");
+	
+	priv->metrics_polling_enabled = false;
+	del_timer_sync(&priv->power_poll_timer);
 }

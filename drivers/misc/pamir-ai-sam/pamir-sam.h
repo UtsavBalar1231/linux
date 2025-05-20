@@ -25,6 +25,7 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
+#include <linux/timer.h>
 
 /* Debug levels */
 #define SAM_DEBUG_OFF     0  /* No debugging */
@@ -53,10 +54,10 @@
 #define TYPE_MASK       0xE0  /* 0b11100000 */
 
 /* Button event flags (5 least significant bits) */
-#define BTN_UP_MASK     0x01
-#define BTN_DOWN_MASK   0x02
-#define BTN_SELECT_MASK 0x04
-#define BTN_POWER_MASK  0x08
+#define BTN_UP_MASK     0x01  /* Button up event */
+#define BTN_DOWN_MASK   0x02  /* Button down event */
+#define BTN_SELECT_MASK 0x04  /* Button select event */
+#define BTN_POWER_MASK  0x08  /* Power button event */
 
 /* LED control flags */
 #define LED_CMD_QUEUE    0x00  /* Queue command for later execution */
@@ -67,27 +68,28 @@
 #define LED_COMPLETION   0xFF  /* Value in data[0] indicating sequence completion */
 
 /* Power management commands */
-#define POWER_CMD_QUERY    0x00  /* Query current power status */
-#define POWER_CMD_SET      0x10  /* Set power state (boot notification) */
-#define POWER_CMD_SLEEP    0x20  /* Enter sleep mode */
-#define POWER_CMD_SHUTDOWN 0x30  /* System shutdown notification */
-#define POWER_CMD_CURRENT  0x40  /* Current draw reporting */
-#define POWER_CMD_BATTERY  0x50  /* Battery state reporting */
-#define POWER_CMD_TEMP     0x60  /* Temperature reporting */
-#define POWER_CMD_VOLTAGE  0x70  /* Voltage reporting */
-#define POWER_CMD_MASK     0xF0  /* Mask for power command bits */
+#define POWER_CMD_QUERY           0x00  /* Query current power status */
+#define POWER_CMD_SET             0x10  /* Set power state (boot notification) */
+#define POWER_CMD_SLEEP           0x20  /* Enter sleep mode */
+#define POWER_CMD_SHUTDOWN        0x30  /* System shutdown notification */
+#define POWER_CMD_CURRENT         0x40  /* Current draw reporting */
+#define POWER_CMD_BATTERY         0x50  /* Battery state reporting */
+#define POWER_CMD_TEMP            0x60  /* Temperature reporting */
+#define POWER_CMD_VOLTAGE         0x70  /* Voltage reporting */
+#define POWER_CMD_REQUEST_METRICS 0x80  /* Request power metrics */
+#define POWER_CMD_MASK            0xF0  /* Mask for power command bits */
 
 /* Debug text flags */
-#define DEBUG_FIRST_CHUNK  0x10
-#define DEBUG_CONTINUE     0x08
-#define DEBUG_CHUNK_MASK   0x07
+#define DEBUG_FIRST_CHUNK  0x10  /* First chunk of debug text */
+#define DEBUG_CONTINUE     0x08  /* Continuation of debug text */
+#define DEBUG_CHUNK_MASK   0x07  /* Mask for chunk number */
 
 /* System control actions */
-#define SYSTEM_PING        0x00
-#define SYSTEM_RESET       0x01
-#define SYSTEM_VERSION     0x02
-#define SYSTEM_STATUS      0x03
-#define SYSTEM_CONFIG      0x04
+#define SYSTEM_PING        0x00  /* Ping the rp2040 controller */
+#define SYSTEM_RESET       0x01  /* Reset the rp2040 controller */
+#define SYSTEM_VERSION     0x02  /* Get system version */
+#define SYSTEM_STATUS      0x03  /* Get system status */
+#define SYSTEM_CONFIG      0x04  /* Get system configuration */
 
 /**
  * struct sam_protocol_packet - SAM packet structure
@@ -142,6 +144,7 @@ struct sam_power_metrics {
  * @debug_level: Current debug level (0-3)
  * @ack_required: Whether commands require acknowledgment
  * @recovery_timeout_ms: Timeout for protocol recovery
+ * @power_poll_interval_ms: Polling interval for power metrics
  *
  * This struct holds configurable parameters for the SAM protocol driver
  * that can be set through device tree properties.
@@ -150,6 +153,7 @@ struct sam_protocol_config {
 	unsigned int debug_level;
 	bool ack_required;
 	unsigned int recovery_timeout_ms;
+	unsigned int power_poll_interval_ms; /* Polling interval for power metrics */
 };
 
 /**
@@ -172,6 +176,8 @@ struct sam_protocol_config {
  * @rx_state: Current state of packet processing state machine
  * @work_queue: Workqueue for deferred processing
  * @power_metrics: Power-related metrics from RP2040
+ * @power_poll_timer: Timer for polling power metrics
+ * @metrics_polling_enabled: Flag to control polling
  *
  * This struct holds the runtime state of the SAM protocol driver.
  */
@@ -202,6 +208,8 @@ struct sam_protocol_data {
 	
 	/* Power metrics */
 	struct sam_power_metrics power_metrics;
+	struct timer_list power_poll_timer; /* Timer for polling power metrics */
+	bool metrics_polling_enabled;       /* Flag to control polling */
 };
 
 /* Function declarations */
@@ -222,6 +230,9 @@ int send_boot_notification(struct sam_protocol_data *priv);
 int send_shutdown_notification(struct sam_protocol_data *priv, uint8_t shutdown_mode);
 int register_power_handlers(struct sam_protocol_data *priv);
 void unregister_power_handlers(struct sam_protocol_data *priv);
+int request_power_metrics(struct sam_protocol_data *priv);
+void start_power_metrics_polling(struct sam_protocol_data *priv);
+void stop_power_metrics_polling(struct sam_protocol_data *priv);
 
 /* Message handlers */
 void process_button_packet(struct sam_protocol_data *priv,

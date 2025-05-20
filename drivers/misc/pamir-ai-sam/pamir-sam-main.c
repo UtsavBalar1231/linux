@@ -74,16 +74,20 @@ static void sam_protocol_load_config(struct device_node *node,
 	config->debug_level = debug; /* Use module parameter as default */
 	config->ack_required = false;
 	config->recovery_timeout_ms = 1000;
+	config->power_poll_interval_ms = 1000; /* Default: poll every 1 second */
 
 	/* Override with device tree settings if present */
 	of_property_read_u32(node, "debug-level", &config->debug_level);
 	of_property_read_u32(node, "recovery-timeout-ms",
 			  &config->recovery_timeout_ms);
+	of_property_read_u32(node, "power-poll-interval-ms",
+			  &config->power_poll_interval_ms);
 
 	config->ack_required = of_property_read_bool(node, "ack-required");
 	
-	dev_info(&serdev->dev, "SAM driver configuration: debug=%d, ack=%d, timeout=%d ms\n",
-		config->debug_level, config->ack_required, config->recovery_timeout_ms);
+	dev_info(&serdev->dev, "SAM driver configuration: debug=%d, ack=%d, timeout=%d ms, power poll=%d ms\n",
+		config->debug_level, config->ack_required, 
+		config->recovery_timeout_ms, config->power_poll_interval_ms);
 }
 
 /**
