@@ -176,6 +176,15 @@ static int sam_protocol_probe(struct serdev_device *serdev)
 	else
 		dev_warn(&serdev->dev, "Initial communication test failed\n");
 
+	/* Send boot notification to RP2040 */
+	if (send_boot_notification(priv) == 0)
+		dev_info(&serdev->dev, "Boot notification sent successfully\n");
+	else
+		dev_warn(&serdev->dev, "Failed to send boot notification\n");
+
+	/* Register shutdown notification handler */
+	register_power_handlers(priv);
+
 	dev_info(&serdev->dev, "SAM protocol driver initialized and ready\n");
 	return 0;
 }
@@ -191,6 +200,12 @@ static void sam_protocol_remove(struct serdev_device *serdev)
 	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
 
 	dev_info(&serdev->dev, "Removing SAM protocol driver\n");
+
+	/* Unregister power notification handlers */
+	unregister_power_handlers(priv);
+
+	/* Send shutdown notification */
+	send_shutdown_notification(priv, 0);
 
 	if (priv->work_queue)
 		destroy_workqueue(priv->work_queue);

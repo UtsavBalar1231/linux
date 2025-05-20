@@ -28,7 +28,7 @@ The following table provides an overview of the implementation status for each m
 | Protocol Core      | Complete                     | Core packet processing functionality is implemented                          |
 | Input Handler      | Complete                     | Button events are fully supported                                            |
 | LED Handler        | Partial                      | Basic control implemented; LED brightness control from host is pending       |
-| Power Manager      | Minimal                      | **Missing critical boot/shutdown notifications; needs kernel modifications** |
+| Power Manager      | Complete                     | Boot and shutdown notifications implemented with kernel reboot notifier      |
 | Display Controller | Minimal                      | Status reporting only; active display control pending                        |
 | Debug Interface    | Complete                     | Both debug codes and text messages fully supported                           |
 | System Commands    | Complete                     | All core system commands are implemented                                     |
@@ -182,12 +182,11 @@ Power management commands coordinate power states between the Linux host and the
 
 **Implementation Note:**
 
-- **Current implementation is minimal and incomplete**
-- **Critical functionality missing:** Boot and shutdown notifications aren't automatically sent
-- A `POWER_CMD_SET` with appropriate state flags should be sent during kernel boot
-- A `POWER_CMD_SHUTDOWN` should be sent during system shutdown
-- Kernel modifications needed to integrate with the Linux power management subsystem
-- Currently only handles responses to power status queries from the microcontroller
+- **Fully implemented in the kernel**
+- Boot notification sent automatically during driver initialization
+- Shutdown notification sent automatically during system shutdown via Linux reboot notifier
+- Sleep mode transitions supported for power management
+- RP2040 firmware provides visual feedback for power state transitions
 
 ### Power Command Types
 
@@ -200,26 +199,27 @@ Power management commands coordinate power states between the Linux host and the
 
 ### Boot and Shutdown Notifications
 
-**Boot Notification (Currently Missing):**
+**Boot Notification:**
 
-- The kernel should send a `POWER_CMD_SET` packet to the microcontroller during boot
+- The kernel automatically sends a `POWER_CMD_SET` packet to the microcontroller during boot
 - This notifies the RP2040 that the host is now running
 - Example packet: `{0x50, 0x01, 0x00, 0x51}` (Set to running state)
-- Should be sent after serdev initialization but before driver is fully operational
+- Sent during driver initialization in `sam_protocol_probe()`
 
-**Shutdown Notification (Currently Missing):**
+**Shutdown Notification:**
 
-- The kernel should send a `POWER_CMD_SHUTDOWN` packet before system shutdown
+- The kernel automatically sends a `POWER_CMD_SHUTDOWN` packet before system shutdown
 - This allows the RP2040 to prepare for power loss
 - Example packet: `{0x70, 0x00, 0x00, 0x70}` (Normal shutdown)
-- Should be implemented via a kernel PM notifier or shutdown hook
+- Implemented via Linux reboot notifier system
+- RP2040 acknowledges receipt and performs necessary shutdown preparations
 
-**Required Kernel Modifications:**
+**Kernel Implementation:**
 
-- Add code to `sam_protocol_probe()` to send boot notification after initialization
-- Add a power management notifier to detect shutdown events
-- Register a shutdown handler that sends the shutdown packet
-- Modify `sam_protocol_remove()` to send a shutdown notification packet
+- Boot notification sent in `sam_protocol_probe()` via `send_boot_notification()`
+- Shutdown notification handled by registering a reboot notifier 
+- `sam_reboot_notifier_call()` callback sends the shutdown notification when triggered
+- Separate handlers for normal and emergency shutdown modes
 
 ### Power Data Format
 
@@ -227,7 +227,7 @@ The data bytes' interpretation depends on the specific power command.
 
 For POWER_CMD_QUERY responses:
 
-- data\[0\]: Power state (1 = Running)
+- data\[0\]: Power state (1 = Running, 0 = Off, 2 = Suspended)
 - data\[1\]: Reserved
 
 For POWER_CMD_SET requests:
@@ -237,7 +237,7 @@ For POWER_CMD_SET requests:
 
 For POWER_CMD_SHUTDOWN requests:
 
-- data\[0\]: Shutdown mode (0 = Normal, 1 = Emergency)
+- data\[0\]: Shutdown mode (0 = Normal, 1 = Emergency, 2 = Reboot)
 - data\[1\]: Reason code (optional diagnostic information)
 
 ## System Commands

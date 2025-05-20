@@ -187,6 +187,12 @@ int send_led_command(struct sam_protocol_data *priv, uint8_t mode,
 int send_system_command(struct sam_protocol_data *priv, uint8_t action,
 			uint8_t command, uint8_t subcommand);
 
+/* Power management functions */
+int send_boot_notification(struct sam_protocol_data *priv);
+int send_shutdown_notification(struct sam_protocol_data *priv, uint8_t shutdown_mode);
+int register_power_handlers(struct sam_protocol_data *priv);
+void unregister_power_handlers(struct sam_protocol_data *priv);
+
 /* Message handlers */
 void process_button_packet(struct sam_protocol_data *priv,
 			   const struct sam_protocol_packet *packet);
