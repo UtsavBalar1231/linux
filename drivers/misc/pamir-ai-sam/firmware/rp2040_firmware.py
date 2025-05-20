@@ -166,15 +166,10 @@ BTN_SELECT_MASK = 0x04
 BTN_POWER_MASK  = 0x08
 
 # LED control flags
-LED_CMD_IMMEDIATE = 0x00
-LED_CMD_SEQUENCE  = 0x10
-LED_MODE_STATIC   = 0x00
-LED_MODE_BLINK    = 0x04
-LED_MODE_FADE     = 0x08
-LED_MODE_RAINBOW  = 0x0C
-LED_MODE_MASK     = 0x0C
-LED_ID_ALL        = 0x00
-LED_ID_MASK       = 0x03
+LED_CMD_QUEUE    = 0x00  # Queue command for later execution
+LED_CMD_EXECUTE  = 0x10  # Execute all queued commands
+LED_ID_MASK      = 0x0F  # LED identifier mask (0-15)
+LED_COMPLETION   = 0xFF  # Value in data[0] indicating sequence completion
 
 # Power commands
 POWER_CMD_QUERY    = 0x00  # Query current power status
@@ -256,6 +251,10 @@ class PamirProtocol:
         self.np = neopixel.NeoPixel(machine.Pin(20), 1)  # Single LED on pin 20
         self.np_brightness = 0.5  # Default brightness 50%
         self.led_animation_running = False
+        
+        # LED sequence queues for each LED ID (up to 16 LEDs)
+        self.led_queues = [[] for _ in range(16)]
+        self.led_active_sequence = [False] * 16  # Track if a sequence is running
         
         # Protocol state
         self.rx_buffer = bytearray(PACKET_SIZE)
@@ -373,6 +372,95 @@ class PamirProtocol:
         """Get debounced state of a pin"""
         return pin.value() and self._debounce(pin)
     
+    def _process_led_packet(self, packet):
+        """Process LED control packet"""
+        # Extract bits from packet
+        cmd_type = packet[0] & LED_CMD_EXECUTE  # 0 = Queue, 0x10 = Execute
+        led_id = packet[0] & LED_ID_MASK  # LED ID (0-15)
+        
+        # Extract RGB and time values
+        r = (packet[1] >> 4) & 0x0F
+        g = packet[1] & 0x0F
+        b = (packet[2] >> 4) & 0x0F
+        time_value = packet[2] & 0x0F
+        
+        self.debug_print(f"LED packet: cmd={cmd_type}, id={led_id}, RGB=({r},{g},{b}), time={time_value}")
+        
+        if cmd_type == LED_CMD_QUEUE:
+            # Queue this color in the sequence for this LED
+            self.led_queues[led_id].append((r, g, b, time_value))
+            self.debug_print(f"Queued color for LED {led_id}, queue length: {len(self.led_queues[led_id])}")
+            
+        elif cmd_type == LED_CMD_EXECUTE:
+            # Check if there are any colors in the queue
+            if len(self.led_queues[led_id]) > 0:
+                self.debug_print(f"Executing sequence for LED {led_id} with {len(self.led_queues[led_id])} steps")
+                
+                # Start sequence execution in a separate thread to not block
+                if not self.led_active_sequence[led_id]:
+                    self.led_active_sequence[led_id] = True
+                    _thread.start_new_thread(self._execute_led_sequence, (led_id,))
+            else:
+                self.debug_print(f"Execute command received but queue is empty for LED {led_id}")
+                # Send completion immediately for empty queue
+                self._send_led_completion(led_id, 0)
+    
+    def _execute_led_sequence(self, led_id):
+        """Execute the queued LED sequence for the specified LED ID"""
+        try:
+            sequence = self.led_queues[led_id].copy()
+            sequence_length = len(sequence)
+            
+            self.debug_print(f"Starting LED sequence for LED {led_id}, {sequence_length} steps")
+            
+            # Loop through each color in the sequence
+            for r, g, b, time_value in sequence:
+                # Scale RGB values to 0-255 range
+                r_scaled = (r * 255) // 15
+                g_scaled = (g * 255) // 15
+                b_scaled = (b * 255) // 15
+                
+                # Convert time value to milliseconds (0-15 scale to 0-1500ms)
+                delay_ms = time_value * 100 if time_value > 0 else 100
+                
+                # Set the LED color
+                with self.neopixel_lock:
+                    # If this is LED 0, treat it as the main LED, otherwise implement logic for other LEDs
+                    if led_id == 0:
+                        self.np[0] = (r_scaled, g_scaled, b_scaled)
+                        self.np.write()
+                    else:
+                        # Here you would have logic for controlling other LEDs if hardware supports it
+                        # For now, it's a placeholder
+                        pass
+                
+                # Wait for the specified time
+                utime.sleep_ms(delay_ms)
+                
+                # Feed the watchdog during long sequences
+                self.wdt.feed()
+            
+            # Clear the queue after execution
+            self.led_queues[led_id] = []
+            
+            # Send completion notification
+            self._send_led_completion(led_id, sequence_length)
+        
+        finally:
+            # Always ensure we mark the sequence as inactive
+            self.led_active_sequence[led_id] = False
+    
+    def _send_led_completion(self, led_id, sequence_length):
+        """Send LED sequence completion acknowledgment"""
+        self.debug_print(f"Sending completion ack for LED {led_id}")
+        
+        # Create acknowledgment packet
+        # Type: LED | LED_CMD_EXECUTE | led_id
+        # data[0]: LED_COMPLETION (0xFF)
+        # data[1]: sequence_length
+        self.send_packet(TYPE_LED | LED_CMD_EXECUTE | (led_id & LED_ID_MASK), 
+                        LED_COMPLETION, sequence_length)
+    
     def _set_led_color(self, r, g, b, brightness=None):
         """Set the LED to a specific color"""
         with self.neopixel_lock:
@@ -385,76 +473,6 @@ class PamirProtocol:
             
             self.np[0] = (actual_r, actual_g, actual_b)
             self.np.write()
-    
-    def _process_led_packet(self, packet):
-        """Process LED control packet"""
-        mode = packet[0] & LED_MODE_MASK
-        
-        # Extract RGB values (4 bits each)
-        r = (packet[1] >> 4) & 0x0F
-        g = packet[1] & 0x0F
-        b = (packet[2] >> 4) & 0x0F
-        value = packet[2] & 0x0F
-        
-        # Scale RGB values to 0-255 range
-        r = (r * 255) // 15
-        g = (g * 255) // 15
-        b = (b * 255) // 15
-        
-        # Set brightness based on value parameter (0-15)
-        brightness = value / 15.0
-        
-        if mode == LED_MODE_STATIC:
-            # Static color
-            self._set_led_color(r, g, b, brightness)
-            
-        elif mode == LED_MODE_BLINK and not self.led_animation_running:
-            # Start blinking in a separate thread
-            self.led_animation_running = True
-            _thread.start_new_thread(self._blink_led, (r, g, b, brightness, value))
-            
-        elif mode == LED_MODE_FADE and not self.led_animation_running:
-            # Start fading in a separate thread
-            self.led_animation_running = True
-            _thread.start_new_thread(self._fade_led, (r, g, b, brightness, value))
-    
-    def _blink_led(self, r, g, b, brightness, count):
-        """Blink the LED a specific number of times"""
-        try:
-            # Number of blinks is determined by value parameter
-            blink_count = max(1, count)
-            
-            for i in range(blink_count * 2):
-                if i % 2 == 0:
-                    self._set_led_color(r, g, b, brightness)
-                else:
-                    self._set_led_color(0, 0, 0, 0)
-                utime.sleep_ms(200)  # 200ms on/off
-                
-            # Always end in the off state
-            self._set_led_color(0, 0, 0, 0)
-            
-            # Send completion notification
-            self.send_debug_code(DEBUG_CAT_SYSTEM, 0x10, 0x00)  # LED task completed
-        finally:
-            self.led_animation_running = False
-    
-    def _fade_led(self, r, g, b, target_brightness, steps):
-        """Fade the LED to a target brightness"""
-        try:
-            steps = max(1, steps)
-            start_brightness = 0
-            
-            # Fade in
-            for i in range(steps + 1):
-                current = start_brightness + (target_brightness - start_brightness) * i / steps
-                self._set_led_color(r, g, b, current)
-                utime.sleep_ms(50)
-                
-            # Send completion notification
-            self.send_debug_code(DEBUG_CAT_SYSTEM, 0x10, 0x00)  # LED task completed
-        finally:
-            self.led_animation_running = False
     
     def _process_system_packet(self, packet):
         """Process system command packet"""
@@ -536,6 +554,9 @@ class PamirProtocol:
             # Send acknowledgment
             self.send_packet(TYPE_POWER | POWER_CMD_SHUTDOWN, data1, 0x01)  # ACK with original mode and flag=1
             
+            # Stop any running LED sequences
+            self._cleanup_led_sequences()
+            
             # Visual indicator - red LED pulse
             self._set_led_color(255, 0, 0, 0.5)  # Red at 50%
             utime.sleep_ms(1000)
@@ -558,6 +579,23 @@ class PamirProtocol:
             if data1 == SHUTDOWN_MODE_EMERGENCY:
                 self.debug_print("Emergency shutdown - immediate action")
                 # Additional emergency actions could be added here
+                
+    def _cleanup_led_sequences(self):
+        """Clean up all LED sequences and resources"""
+        self.debug_print("Cleaning up LED sequences")
+        
+        # Clear all LED sequence queues
+        for i in range(len(self.led_queues)):
+            self.led_queues[i] = []
+            
+        # Turn off all LEDs
+        with self.neopixel_lock:
+            self.np[0] = (0, 0, 0)
+            self.np.write()
+            
+        # We don't try to stop threads, as that's not possible in MicroPython
+        # Instead, we set flags that will be checked in the thread loop
+        self.led_active_sequence = [False] * len(self.led_active_sequence)
     
     def process_packet(self, packet):
         """Process a complete packet"""
