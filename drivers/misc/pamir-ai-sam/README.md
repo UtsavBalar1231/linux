@@ -177,6 +177,101 @@ R: 0, G: 0, B: 0
 Time: 0
 ```
 
+### Example: Controlling All 16 LEDs
+
+This example demonstrates how to control all 16 LEDs by queueing multiple color instructions and executing them:
+
+```c
+// Function to queue a color for a specific LED
+void queue_led_color(struct sam_protocol_data *priv, uint8_t led_id, 
+                    uint8_t r, uint8_t g, uint8_t b, uint8_t time)
+{
+    send_led_command(priv, led_id, false, r, g, b, time);
+}
+
+// Function to execute the sequence for a specific LED
+void execute_led_sequence(struct sam_protocol_data *priv, uint8_t led_id)
+{
+    send_led_command(priv, led_id, true, 0, 0, 0, 0);
+}
+
+// Example: Set up a rainbow pattern across all 16 LEDs
+void setup_rainbow_pattern(struct sam_protocol_data *priv)
+{
+    // Queue colors for all 16 LEDs
+    queue_led_color(priv, 0, 15, 0, 0, 5);    // LED 0: Red
+    queue_led_color(priv, 1, 15, 4, 0, 5);    // LED 1: Orange
+    queue_led_color(priv, 2, 15, 8, 0, 5);    // LED 2: Yellow-orange
+    queue_led_color(priv, 3, 15, 15, 0, 5);   // LED 3: Yellow
+    queue_led_color(priv, 4, 8, 15, 0, 5);    // LED 4: Yellow-green
+    queue_led_color(priv, 5, 0, 15, 0, 5);    // LED 5: Green
+    queue_led_color(priv, 6, 0, 15, 8, 5);    // LED 6: Turquoise 
+    queue_led_color(priv, 7, 0, 15, 15, 5);   // LED 7: Cyan
+    queue_led_color(priv, 8, 0, 8, 15, 5);    // LED 8: Light blue
+    queue_led_color(priv, 9, 0, 0, 15, 5);    // LED 9: Blue
+    queue_led_color(priv, 10, 4, 0, 15, 5);   // LED 10: Purple
+    queue_led_color(priv, 11, 8, 0, 15, 5);   // LED 11: Violet
+    queue_led_color(priv, 12, 15, 0, 15, 5);  // LED 12: Magenta
+    queue_led_color(priv, 13, 15, 0, 8, 5);   // LED 13: Pink
+    queue_led_color(priv, 14, 15, 0, 4, 5);   // LED 14: Light pink
+    queue_led_color(priv, 15, 15, 8, 8, 5);   // LED 15: White-ish
+    
+    // Execute all LED sequences (one command per LED)
+    for (uint8_t i = 0; i < 16; i++) {
+        execute_led_sequence(priv, i);
+        msleep(10); // Small delay between commands
+    }
+}
+```
+
+#### Raw Packet Examples for All 16 LEDs
+
+The following raw packets demonstrate queueing a unique color for each of the 16 LEDs and then executing their sequences:
+
+```
+// Queue unique colors for all 16 LEDs (format: {type_flags, data[0], data[1], checksum})
+{0x20, 0xF0, 0x05, 0xD5}  // LED 0: Red
+{0x21, 0xF4, 0x05, 0xD0}  // LED 1: Orange
+{0x22, 0xF8, 0x05, 0xDF}  // LED 2: Yellow-orange
+{0x23, 0xFF, 0x05, 0xD7}  // LED 3: Yellow
+{0x24, 0x8F, 0x05, 0xCA}  // LED 4: Yellow-green
+{0x25, 0x0F, 0x05, 0x2B}  // LED 5: Green
+{0x26, 0x0F, 0x85, 0xA8}  // LED 6: Turquoise
+{0x27, 0x0F, 0xF5, 0xD9}  // LED 7: Cyan
+{0x28, 0x08, 0xF5, 0xD5}  // LED 8: Light blue
+{0x29, 0x00, 0xF5, 0xDC}  // LED 9: Blue
+{0x2A, 0x40, 0xF5, 0x9F}  // LED 10: Purple
+{0x2B, 0x80, 0xF5, 0xDE}  // LED 11: Violet
+{0x2C, 0xF0, 0xF5, 0x27}  // LED 12: Magenta
+{0x2D, 0xF0, 0x85, 0x58}  // LED 13: Pink
+{0x2E, 0xF0, 0x45, 0x9B}  // LED 14: Light pink
+{0x2F, 0xF8, 0x85, 0x50}  // LED 15: White-ish
+
+// Execute sequences for all 16 LEDs (format: {type_flags, data[0], data[1], checksum})
+{0x30, 0x00, 0x00, 0x30}  // Execute LED 0
+{0x31, 0x00, 0x00, 0x31}  // Execute LED 1
+{0x32, 0x00, 0x00, 0x32}  // Execute LED 2
+{0x33, 0x00, 0x00, 0x33}  // Execute LED 3
+{0x34, 0x00, 0x00, 0x34}  // Execute LED 4
+{0x35, 0x00, 0x00, 0x35}  // Execute LED 5
+{0x36, 0x00, 0x00, 0x36}  // Execute LED 6
+{0x37, 0x00, 0x00, 0x37}  // Execute LED 7
+{0x38, 0x00, 0x00, 0x38}  // Execute LED 8
+{0x39, 0x00, 0x00, 0x39}  // Execute LED 9
+{0x3A, 0x00, 0x00, 0x3A}  // Execute LED 10
+{0x3B, 0x00, 0x00, 0x3B}  // Execute LED 11
+{0x3C, 0x00, 0x00, 0x3C}  // Execute LED 12
+{0x3D, 0x00, 0x00, 0x3D}  // Execute LED 13
+{0x3E, 0x00, 0x00, 0x3E}  // Execute LED 14
+{0x3F, 0x00, 0x00, 0x3F}  // Execute LED 15
+```
+
+After sending these execute commands, each LED will acknowledge completion with a packet in this format:
+```
+{0x3X, 0xFF, 0x01, checksum}  // LED X sequence completed (where X is LED ID 0-15)
+```
+Where the second byte (0xFF) indicates completion and the third byte (0x01) indicates sequence length.
+
 ### LED Sequence Completion Acknowledgment
 
 When the LED sequence is complete, the RP2040 sends an acknowledgment packet:

@@ -6,7 +6,17 @@ config PAMIR_AI_SAM_MODULE
 	  for communication between the host processor and RP2040 microcontroller.
 	  
 	  This driver interfaces with hardware components on the CM5 device,
-	  specifically handling button inputs and RGB LED control via UART.
+	  including:
+	  - Button input handling via Linux input subsystem
+	  - RGB LED control (up to 16 LEDs with different animation modes)
+	  - Boot/shutdown notifications via Linux reboot notifier
+	  - Diagnostic information and debugging
+	  
+	  The driver also creates a character device at /dev/pamir-sam
+	  for direct userspace communication with the microcontroller.
+	  
+	  Debug level can be controlled with the 'debug' module parameter
+	  (0=off, 1=errors, 2=info, 3=verbose).
 	  
 	  To compile this driver as a module, choose M here: the module
 	  will be called pamir-ai-sam. 

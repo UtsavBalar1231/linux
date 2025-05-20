@@ -51,15 +51,10 @@ Example: 0x06 0x00 0x00 0x06 = Select+Down buttons pressed
 LED Control (TYPE_LED = 0x20):
 -----------------------------
 Byte 0 (5 LSB bits):
-  Bits 0-1: LED ID (0x00 = all LEDs)
-  Bits 2-3: LED mode:
-    00 (0x00): Static color
-    01 (0x04): Blink
-    10 (0x08): Fade
-    11 (0x0C): Rainbow effect
+  Bits 0-3: LED ID (0x00-0x0F, supports up to 16 unique LEDs)
   Bit 4: Command type:
-    0 (0x00): Immediate command
-    1 (0x10): Sequence command
+    0 (0x00): Queue color instruction
+    1 (0x10): Execute queued sequence
 
 Byte 1:
   Bits 4-7: Red value (0-15)
@@ -67,9 +62,21 @@ Byte 1:
 
 Byte 2:
   Bits 4-7: Blue value (0-15)
-  Bits 0-3: Value parameter (brightness or timing)
+  Bits 0-3: Time value (delay between color changes, 0-15)
 
-Example: 0x24 0xF0 0x0F 0xDB = Static red color at full brightness
+Queue-based LED control:
+1. Send one or more packets with Command Type = 0 to queue colors
+2. Send a final packet with Command Type = 1 to execute the entire sequence
+3. The RP2040 will acknowledge when sequence completes
+
+Completion Acknowledgment:
+When an LED sequence completes, the RP2040 sends:
+- TYPE_LED | LED_CMD_EXECUTE | LED_ID
+- data[0] = 0xFF (completion indicator)
+- data[1] = sequence length
+
+Example: Queue red color for LED 1: 0x21 0xF0 0x05 0xD4
+         Execute sequence for LED 1: 0x31 0x00 0x00 0x31
 
 Power Management (TYPE_POWER = 0x40):
 ------------------------------------
@@ -83,7 +90,9 @@ Byte 0 (5 LSB bits):
 
 Bytes 1-2: Command-specific data
 
-Example: 0x70 0x00 0x00 0x70 = Shutdown command
+Boot/Shutdown Notifications:
+- Boot: 0x50 0x01 0x00 0x51 (Linux has booted)
+- Shutdown: 0x70 0x00 0x00 0x70 (Normal shutdown)
 
 Debug Codes (TYPE_DEBUG_CODE = 0x80):
 ------------------------------------
@@ -130,8 +139,9 @@ Usage Examples:
 1. Sending button state:
    [0x03, 0x00, 0x00, 0x03] = Up+Down buttons pressed
 
-2. Setting LED to blink green:
-   [0x24, 0x0F, 0x08, 0x2B] = Blink green LED with medium brightness
+2. Queue red color for LED 0, then execute:
+   [0x20, 0xF0, 0x00, 0xD0] = Queue red color
+   [0x30, 0x00, 0x00, 0x30] = Execute sequence
 
 3. Request system version:
    [0xC2, 0x00, 0x00, 0xC2]
@@ -145,6 +155,8 @@ Implementation Notes:
 - The protocol is designed for efficiency and minimal overhead
 - Commands requiring more than 2 bytes of data use multi-packet sequences
 - Debug text messages split across multiple packets must be reassembled by the receiver
+- LED control uses a queue-based approach to support complex animations
+- Boot and shutdown notifications help coordinate power states between Linux and RP2040
 """
 
 # Protocol definitions
