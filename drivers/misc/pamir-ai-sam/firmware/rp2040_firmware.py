@@ -75,10 +75,10 @@ Power Management (TYPE_POWER = 0x40):
 ------------------------------------
 Byte 0 (5 LSB bits):
   Bits 4-5: Command type:
-    00 (0x00): Power status report
-    01 (0x10): Battery level report
-    10 (0x20): Power mode change
-    11 (0x30): Shutdown command
+    00 (0x00): Query current power status
+    01 (0x10): Set power state (boot notification)
+    10 (0x20): Enter sleep mode
+    11 (0x30): System shutdown notification
   Bits 0-3: Subcommand or parameters
 
 Bytes 1-2: Command-specific data
@@ -176,6 +176,23 @@ LED_MODE_MASK     = 0x0C
 LED_ID_ALL        = 0x00
 LED_ID_MASK       = 0x03
 
+# Power commands
+POWER_CMD_QUERY    = 0x00  # Query current power status
+POWER_CMD_SET      = 0x10  # Set power state (boot notification)
+POWER_CMD_SLEEP    = 0x20  # Enter sleep mode
+POWER_CMD_SHUTDOWN = 0x30  # System shutdown notification
+
+# Power states
+POWER_STATE_OFF     = 0x00  # Powered off
+POWER_STATE_RUNNING = 0x01  # System running
+POWER_STATE_SUSPEND = 0x02  # System suspended/sleeping
+POWER_STATE_LOW     = 0x03  # Low power mode
+
+# Shutdown modes
+SHUTDOWN_MODE_NORMAL    = 0x00  # Normal planned shutdown
+SHUTDOWN_MODE_EMERGENCY = 0x01  # Emergency shutdown (thermal, etc)
+SHUTDOWN_MODE_REBOOT    = 0x02  # System is rebooting
+
 # Debug categories
 DEBUG_CAT_SYSTEM   = 0x00
 DEBUG_CAT_INPUT    = 0x01
@@ -244,6 +261,14 @@ class PamirProtocol:
         self.rx_buffer = bytearray(PACKET_SIZE)
         self.rx_pos = 0
         self.prev_btn_state = 0
+        
+        # System state tracking
+        self.power_state = POWER_STATE_OFF
+        self.linux_booted = False
+        self.boot_complete = False
+        self.shutdown_requested = False
+        self.shutdown_time = 0
+        self.last_receive_time = utime.ticks_ms()
         
         # Thread coordination
         self.eink_lock = _thread.allocate_lock()
@@ -456,10 +481,70 @@ class PamirProtocol:
     def _process_power_packet(self, packet):
         """Process power management packet"""
         command = packet[0] & 0x30  # Extract command bits
+        param = packet[0] & 0x0F    # Extract parameter bits
+        data1 = packet[1]           # Power state or other data
+        data2 = packet[2]           # Flags or additional parameters
         
-        if command == 0x30:  # POWER_CMD_SHUTDOWN
+        self.debug_print(f"Received power packet: cmd=0x{command:02x}, param=0x{param:02x}, data=0x{data1:02x} 0x{data2:02x}")
+        
+        if command == POWER_CMD_QUERY:
+            # Respond with current power state
+            self.debug_print(f"Responding to power query with state: {self.power_state}")
+            self.send_packet(TYPE_POWER | POWER_CMD_QUERY, self.power_state, 0x00)
+            
+        elif command == POWER_CMD_SET:  # POWER_CMD_SET - Boot notification
+            if data1 == POWER_STATE_RUNNING:  # Running state
+                self.debug_print("Received boot notification from Linux host")
+                # Update state
+                self.power_state = POWER_STATE_RUNNING
+                self.linux_booted = True
+                
+                # Send acknowledgment
+                self.send_packet(TYPE_POWER | POWER_CMD_SET, POWER_STATE_RUNNING, 0x00)
+                
+                # Visual indicator - green LED pulse
+                self._set_led_color(0, 255, 0, 0.5)  # Green at 50%
+                utime.sleep_ms(500)
+                self._set_led_color(0, 0, 0, 0)      # Off
+                
+                # Debug code: Boot notification received
+                self.send_debug_code(DEBUG_CAT_POWER, POWER_CMD_SET, POWER_STATE_RUNNING)
+                
+        elif command == POWER_CMD_SLEEP:
+            # Host is entering sleep mode
+            self.debug_print(f"Host entering sleep mode: delay={data1}")
+            self.power_state = POWER_STATE_SUSPEND
+            
+            # Visual indicator - blue pulse
+            self._set_led_color(0, 0, 255, 0.3)  # Blue at 30%
+            utime.sleep_ms(300)
+            self._set_led_color(0, 0, 0, 0)      # Off
+            
+            # Send acknowledgment
+            self.send_packet(TYPE_POWER | POWER_CMD_SLEEP, data1, 0x01)  # ACK
+                
+        elif command == POWER_CMD_SHUTDOWN:
             # Shutdown sequence
-            self.debug_print("Processing shutdown command")
+            self.debug_print(f"Processing shutdown command: mode={data1}")
+            
+            # Update state
+            self.power_state = POWER_STATE_OFF
+            self.linux_booted = False
+            self.shutdown_requested = True
+            self.shutdown_time = utime.ticks_ms()
+            
+            # Send acknowledgment
+            self.send_packet(TYPE_POWER | POWER_CMD_SHUTDOWN, data1, 0x01)  # ACK with original mode and flag=1
+            
+            # Visual indicator - red LED pulse
+            self._set_led_color(255, 0, 0, 0.5)  # Red at 50%
+            utime.sleep_ms(1000)
+            self._set_led_color(0, 0, 0, 0)      # Off
+            
+            # Debug code: Shutdown notification received
+            self.send_debug_code(DEBUG_CAT_POWER, POWER_CMD_SHUTDOWN, data1)
+            
+            # Prepare hardware for shutdown
             self.eink_status.low()
             self.eink_mux.low()
             
@@ -468,6 +553,11 @@ class PamirProtocol:
                 
             with self.eink_lock:
                 self.eink_running = False
+                
+            # For emergency shutdown (data1 == 1), perform immediate actions
+            if data1 == SHUTDOWN_MODE_EMERGENCY:
+                self.debug_print("Emergency shutdown - immediate action")
+                # Additional emergency actions could be added here
     
     def process_packet(self, packet):
         """Process a complete packet"""
@@ -490,6 +580,9 @@ class PamirProtocol:
         """Check for and process any available UART data"""
         if self.uart.any():
             data = self.uart.read(self.uart.any())
+            
+            # Update last receive time for monitoring
+            self.last_receive_time = utime.ticks_ms()
             
             for byte in data:
                 # Store byte in buffer
@@ -569,9 +662,22 @@ class PamirProtocol:
         # Start E-ink task in separate thread
         _thread.start_new_thread(self._core1_task, ())
         
-        # Main loop for shutdown monitoring
+        # Main loop for system monitoring
+        last_status_time = utime.ticks_ms()
+        
         while True:
             self.wdt.feed()
+            current_time = utime.ticks_ms()
+            
+            # Periodically check status
+            if utime.ticks_diff(current_time, last_status_time) > 5000:  # Every 5 seconds
+                # If no communication received for too long and Linux was booted, handle potential crash
+                if self.linux_booted and not self.shutdown_requested and \
+                   utime.ticks_diff(current_time, self.last_receive_time) > 30000:  # 30 seconds
+                    self.debug_print("WARNING: No communication from Linux host for 30 seconds")
+                    self.send_debug_code(DEBUG_CAT_POWER, 0xFE, 0x01)  # Host potentially crashed
+                
+                last_status_time = current_time
             
             # Check for simultaneous UP+SELECT press to trigger shutdown
             if self.thread_handoff_complete:
@@ -582,7 +688,10 @@ class PamirProtocol:
                             break
                         if utime.ticks_diff(utime.ticks_ms(), start_time) >= 2000:
                             # Send shutdown packet
-                            self.send_packet(TYPE_POWER | 0x30, 0, 0)  # POWER_SHUTDOWN command
+                            self.send_packet(TYPE_POWER | POWER_CMD_SHUTDOWN, SHUTDOWN_MODE_NORMAL, 0)
+                            # Update state
+                            self.power_state = POWER_STATE_OFF
+                            self.shutdown_requested = True
                         self.wdt.feed()
                         utime.sleep_ms(10)
                     
