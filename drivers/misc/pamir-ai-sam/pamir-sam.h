@@ -59,15 +59,12 @@
 #define BTN_POWER_MASK  0x08
 
 /* LED control flags */
-#define LED_CMD_IMMEDIATE 0x00
-#define LED_CMD_SEQUENCE  0x10
-#define LED_MODE_STATIC   0x00
-#define LED_MODE_BLINK    0x04
-#define LED_MODE_FADE     0x08
-#define LED_MODE_RAINBOW  0x0C
-#define LED_MODE_MASK     0x0C
-#define LED_ID_ALL        0x00
-#define LED_ID_MASK       0x03
+#define LED_CMD_QUEUE    0x00  /* Queue command for later execution */
+#define LED_CMD_EXECUTE  0x10  /* Execute all queued commands */
+#define LED_ID_MASK      0x0F  /* LED identifier mask (0-15) */
+
+/* LED completion states */
+#define LED_COMPLETION   0xFF  /* Value in data[0] indicating sequence completion */
 
 /* Power management commands */
 #define POWER_CMD_QUERY    0x00

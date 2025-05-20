@@ -124,49 +124,72 @@ LED commands control the RGB LEDs on the CM5 device. These commands are primaril
 
 LED commands use the following format in the `type_flags` byte:
 
-| Bits | Field        | Description                   |
-| ---- | ------------ | ----------------------------- |
-| 7-5  | Type         | Always 0b001 for LED commands |
-| 4    | Command Type | 0 = Immediate, 1 = Sequence   |
-| 3-2  | Mode         | LED mode (see below)          |
-| 1-0  | LED ID       | LED identifier (0 = all LEDs) |
+| Bits | Field        | Description                                               |
+| ---- | ------------ | --------------------------------------------------------- |
+| 7-5  | Type         | Always 0b001 for LED commands                             |
+| 4    | Command Type | 0 = Queue instruction, 1 = Execute sequence               |
+| 3-0  | LED ID       | LED identifier (0-15, supporting up to 16 unique LEDs)    |
 
-### LED Modes
+### LED Queue-Based Execution
 
-| Value | Mode             | Description          |
-| ----- | ---------------- | -------------------- |
-| 0x00  | LED_MODE_STATIC  | Static color display |
-| 0x04  | LED_MODE_BLINK   | Blinking animation   |
-| 0x08  | LED_MODE_FADE    | Fading animation     |
-| 0x0C  | LED_MODE_RAINBOW | Rainbow color cycle  |
+The LED commands use a queue-based approach:
+1. Send one or more LED commands with Command Type = 0 to queue colors
+2. Send a final LED command with Command Type = 1 to execute the entire sequence
+3. LED MCU will acknowledge when the sequence is complete
+
+This allows for complex animations by sending a series of color instructions that will be executed in sequence.
 
 ### LED Data Format
 
-The 2 data bytes contain color information:
+The 2 data bytes contain color and timing information:
 
-| Byte    | Bits | Content                                 |
-| ------- | ---- | --------------------------------------- |
-| data[0] | 7-4  | Red component (0-15)                    |
-| data[0] | 3-0  | Green component (0-15)                  |
-| data[1] | 7-4  | Blue component (0-15)                   |
-| data[1] | 3-0  | Value/brightness or animation parameter |
+| Byte    | Bits | Content                                         |
+| ------- | ---- | ----------------------------------------------- |
+| data[0] | 7-4  | Red component (0-15)                            |
+| data[0] | 3-0  | Green component (0-15)                          |
+| data[1] | 7-4  | Blue component (0-15)                           |
+| data[1] | 3-0  | Time value (delay between color changes, 0-15)  |
 
 ### Sending LED Commands
 
 To send an LED command:
 
 ```c
-int send_led_command(struct sam_protocol_data *priv, uint8_t mode,
-                     uint8_t r, uint8_t g, uint8_t b, uint8_t value);
+int send_led_command(struct sam_protocol_data *priv, uint8_t led_id,
+                    bool execute, uint8_t r, uint8_t g, uint8_t b, uint8_t time);
 ```
 
-Example: Set LED to blink red
+Example: Queue red color for LED 2, then execute
 
 ```
-Mode: LED_MODE_BLINK (0x04)
+// Queue red color
+Type: LED (0b001)
+Command Type: 0 (Queue)
+LED ID: 2
 R: 15, G: 0, B: 0
-Value: Speed parameter (e.g., 8)
+Time: 5
+
+// Execute sequence
+Type: LED (0b001)
+Command Type: 1 (Execute)
+LED ID: 2
+R: 0, G: 0, B: 0
+Time: 0
 ```
+
+### LED Sequence Completion Acknowledgment
+
+When the LED sequence is complete, the RP2040 sends an acknowledgment packet:
+
+```
+Type: LED (0b001)
+Command Type: 1 (Execute bit)
+LED ID: The LED ID that completed the sequence
+data[0]: 0xFF (completion indicator)
+data[1]: sequence length or 0x00
+```
+
+This allows the host to know when a complex animation has completed.
 
 ## Power Management
 
