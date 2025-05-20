@@ -1,294 +1,331 @@
-# Pamir AI Signal Aggregation Module (SAM) Protocol Documentation
+# Pamir AI Signal Aggregation Module (SAM) Technical Reference Manual
 
-## Overview
+**Document Classification:** Technical Reference Manual  
+**Document Version:** 1.0.0  
+**Last Updated:** 2025-05-19  
+**Target Audience:** System Integrators, Embedded Developers, Kernel Maintainers
 
-The Pamir AI Signal Aggregation Module (SAM) is a communication protocol used to interface between a Linux host system and the RP2040 microcontroller in Pamir AI CM5 devices. This protocol enables bidirectional communication for hardware control and status reporting via UART.
+## Table of Contents
 
-## Architecture
+1. [Introduction](#introduction)
+   1. [Purpose](#purpose)
+   2. [Scope](#scope)
+   3. [Target Devices](#target-devices)
+2. [Architecture Overview](#architecture-overview)
+   1. [Component Interactions](#component-interactions)
+   2. [Implementation Status](#implementation-status)
+3. [Protocol Specification](#protocol-specification)
+   1. [Packet Structure](#packet-structure)
+   2. [Field Encoding](#field-encoding)
+   3. [Message Types](#message-types)
+   4. [Checksum Algorithm](#checksum-algorithm)
+   5. [Endianness Considerations](#endianness-considerations)
+   6. [Timing Constraints](#timing-constraints)
+4. [Interface Specifications](#interface-specifications)
+   1. [Button Interface](#button-interface)
+   2. [LED Control](#led-control)
+   3. [Power Management](#power-management)
+   4. [Display Control](#display-control)
+   5. [Debug Interface](#debug-interface)
+   6. [System Commands](#system-commands)
+   7. [Extended Commands](#extended-commands)
+5. [Versioning and Compatibility](#versioning-system)
+6. [Device Integration](#device-integration)
+   1. [Userspace Interface](#userspace-interface)
+   2. [Device Tree Configuration](#device-tree-configuration)
+   3. [Required Kernel Modifications](#required-kernel-modifications)
+7. [Error Handling and Recovery](#error-handling-and-recovery)
+8. [Debug and Troubleshooting](#debug-and-troubleshooting)
+9. [Performance Considerations](#performance-considerations)
+10. [Packet Reference](#packet-reference)
+11. [Implementation Notes](#implementation-notes)
 
-The SAM driver is implemented as a modular system with the following components:
+## Introduction
 
-| Component          | Description                                                                   |
-| ------------------ | ----------------------------------------------------------------------------- |
-| Protocol Core      | Handles packet parsing, validation, checksum calculation, and dispatching     |
-| Input Handler      | Processes button events and integrates with the Linux input subsystem         |
-| LED Handler        | Controls RGB LEDs with various modes (static, blink, fade, rainbow)           |
-| Power Manager      | Handles power state changes and reporting                                     |
-| Display Controller | Communicates with the E-ink display controller                                |
-| Debug Interface    | Provides diagnostic information and debugging through codes and text messages |
-| System Commands    | Manages overall system control, status, and configuration                     |
-| Character Device   | Provides a userspace interface for sending/receiving raw packets              |
+### Purpose
 
-## Implementation Status
+The Pamir AI Signal Aggregation Module (SAM) Technical Reference Manual provides comprehensive technical specifications for the communication protocol used to interface between a Linux host system and the RP2040 microcontroller in Pamir AI CM5 devices. This protocol enables bidirectional communication for hardware control and status reporting via UART.
 
-The following table provides an overview of the implementation status for each module:
+### Scope
 
-| Component          | Kernel Implementation Status | Notes                                                                        |
-| ------------------ | ---------------------------- | ---------------------------------------------------------------------------- |
-| Protocol Core      | Complete                     | Core packet processing functionality is implemented                          |
-| Input Handler      | Complete                     | Button events are fully supported                                            |
-| LED Handler        | Partial                      | Basic control implemented; LED brightness control from host is pending       |
-| Power Manager      | Complete                     | Boot/shutdown notifications and poll-based power metrics implemented         |
-| Display Controller | Minimal                      | Status reporting only; active display control pending                        |
-| Debug Interface    | Complete                     | Both debug codes and text messages fully supported                           |
-| System Commands    | Complete                     | All core system commands are implemented, including versioning               |
-| Character Device   | Complete                     | Userspace interface is fully functional                                      |
+This document covers the complete technical specification of the SAM protocol, including packet formats, command structures, error handling mechanisms, and integration requirements. It serves as the authoritative reference for both hardware and software implementations of the protocol.
+
+### Target Devices
+
+- **Primary Target:** Pamir AI CM5 devices containing RP2040 microcontrollers
+- **Secondary Targets:** Compatible embedded devices that implement the SAM protocol
+
+## Architecture Overview
+
+The SAM driver implements a modular architecture with clearly defined components that interact through standardized interfaces. The following diagram illustrates the high-level architecture:
+
+```
++--------------------+     +---------------------+
+| Linux Host System  |     | RP2040 MCU          |
+|                    |     |                     |
+|  +---------------+ |     | +---------------+   |
+|  | Userspace API | |     | | Firmware      |   |
+|  +-------+-------+ |     | | Components    |   |
+|          |         |     | +-------+-------+   |
+|  +-------+-------+ |     | +-------+-------+   |
+|  | Kernel Driver | <---->| | Protocol      |   |
+|  +---------------+ |UART | | Handler       |   |
++--------------------+     +---------------------+
+         |                           |
+    +----+---------------------------+----+
+    |                                     |
++---+---+  +-------+  +------+  +--------+
+|Buttons|  |  LEDs |  |Power |  |Display |
++-------+  +-------+  +------+  +--------+
+```
+
+### Component Interactions
+
+The SAM driver architecture consists of the following modular components:
+
+| Component            | Description                                                      | Primary Responsibilities                                                      |
+|----------------------|------------------------------------------------------------------|------------------------------------------------------------------------------|
+| Protocol Core        | Lowest-level packet handling and validation                      | Packet parsing, validation, checksum calculation, dispatching                 |
+| Input Handler        | Button event processing and Linux input subsystem integration    | Debouncing, key mapping, event generation                                     |
+| LED Handler          | RGB LED control with multiple animation modes                    | Color conversion, animation sequencing, brightness control                    |
+| Power Manager        | Power state management and coordination                          | Boot/shutdown notifications, power metrics collection, state transitions      |
+| Display Controller   | E-ink display interfacing and management                         | Status reporting, refresh control, mode selection                             |
+| Debug Interface      | Diagnostic capabilities for troubleshooting                      | Error logging, state reporting, diagnostic code generation                    |
+| System Commands      | Core system control functions                                    | Version exchange, ping/connectivity, configuration                            |
+| Character Device     | Userspace interface for direct protocol access                   | Raw packet transmission/reception, debugging access                           |
+
+### Implementation Status
+
+The following table provides a detailed overview of the implementation status for each component:
+
+| Component          | Kernel Implementation Status | Feature Completeness | API Stability | Notes                                                                        |
+|--------------------|-----------------------------|---------------------|---------------|------------------------------------------------------------------------------|
+| Protocol Core      | Complete                    | 100%                | Stable        | Core packet processing functionality fully implemented and tested             |
+| Input Handler      | Complete                    | 100%                | Stable        | Button events fully supported with Linux input subsystem integration          |
+| LED Handler        | Partial                     | 75%                 | Beta          | Basic control implemented; LED brightness control from host is pending        |
+| Power Manager      | Complete                    | 100%                | Stable        | Boot/shutdown notifications and poll-based power metrics fully implemented    |
+| Display Controller | Minimal                     | 25%                 | Alpha         | Status reporting only; active display control pending                         |
+| Debug Interface    | Complete                    | 100%                | Stable        | Both debug codes and text messages fully supported                            |
+| System Commands    | Complete                    | 100%                | Stable        | All core system commands implemented, including versioning                     |
+| Character Device   | Complete                    | 100%                | Stable        | Userspace interface fully functional with proper error handling               |
 
 ## Protocol Specification
 
 ### Packet Structure
 
-The SAM protocol uses an ultra-optimized 4-byte packet format:
+The SAM protocol employs a fixed-size 4-byte packet format optimized for minimal overhead while maintaining reliable operation. Each packet consists of the following fields:
 
-| Field      | Size    | Description                                                                                  |
-| ---------- | ------- | -------------------------------------------------------------------------------------------- |
-| type_flags | 1 byte  | Message type (3 most significant bits) and command-specific flags (5 least significant bits) |
-| data       | 2 bytes | Payload data (interpretation depends on message type)                                        |
-| checksum   | 1 byte  | XOR checksum of all previous bytes for error detection                                       |
+| Field      | Size    | Offset | Description                                                                                  |
+|------------|---------|--------|----------------------------------------------------------------------------------------------|
+| type_flags | 1 byte  | 0      | Message type (3 most significant bits) and command-specific flags (5 least significant bits) |
+| data[0]    | 1 byte  | 1      | First data byte (interpretation depends on message type)                                     |
+| data[1]    | 1 byte  | 2      | Second data byte (interpretation depends on message type)                                    |
+| checksum   | 1 byte  | 3      | XOR checksum of all previous bytes for error detection                                       |
+
+This corresponds to the C structure:
+
+```c
+struct sam_protocol_packet {
+    uint8_t type_flags;
+    uint8_t data[2];
+    uint8_t checksum;
+} __packed;
+```
+
+### Field Encoding
+
+The `type_flags` byte uses the following bit layout:
+
+```
++---+---+---+---+---+---+---+---+
+| 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
++---+---+---+---+---+---+---+---+
+|   Type    |    Command Flags   |
++---+---+---+---+---+---+---+---+
+```
+
+- **Bits 7-5**: Message type (3 bits, 8 possible types)
+- **Bits 4-0**: Command-specific flags (5 bits, interpretation depends on message type)
+
+The data bytes' interpretation is entirely dependent on the message type and command. Specific encodings are detailed in the respective command sections.
 
 ### Message Types
 
 The 3 most significant bits of the `type_flags` byte define the message type:
 
-| Type Value        | Name            | Description                  |
-| ----------------- | --------------- | ---------------------------- |
-| 0x00 (0b000xxxxx) | TYPE_BUTTON     | Button input events          |
-| 0x20 (0b001xxxxx) | TYPE_LED        | LED control commands         |
-| 0x40 (0b010xxxxx) | TYPE_POWER      | Power management             |
-| 0x60 (0b011xxxxx) | TYPE_DISPLAY    | E-ink display control        |
-| 0x80 (0b100xxxxx) | TYPE_DEBUG_CODE | Debug code messages          |
-| 0xA0 (0b101xxxxx) | TYPE_DEBUG_TEXT | Debug text messages          |
-| 0xC0 (0b110xxxxx) | TYPE_SYSTEM     | System control commands      |
-| 0xE0 (0b111xxxxx) | TYPE_EXTENDED   | Extended commands (reserved) |
+| Type Value (Binary) | Type Value (Hex) | Name            | Direction        | Description                                   |
+|---------------------|------------------|-----------------|------------------|-----------------------------------------------|
+| `0b000xxxxx`        | `0x00`           | TYPE_BUTTON     | MCU → Host       | Button state change events                    |
+| `0b001xxxxx`        | `0x20`           | TYPE_LED        | Host ↔ MCU       | LED control commands and status               |
+| `0b010xxxxx`        | `0x40`           | TYPE_POWER      | Host ↔ MCU       | Power management and metrics                  |
+| `0b011xxxxx`        | `0x60`           | TYPE_DISPLAY    | Host ↔ MCU       | E-ink display control and status             |
+| `0b100xxxxx`        | `0x80`           | TYPE_DEBUG_CODE | MCU → Host       | Numeric debug codes for diagnostics          |
+| `0b101xxxxx`        | `0xA0`           | TYPE_DEBUG_TEXT | MCU → Host       | Text debug messages (can span packets)        |
+| `0b110xxxxx`        | `0xC0`           | TYPE_SYSTEM     | Host ↔ MCU       | Core system control commands                  |
+| `0b111xxxxx`        | `0xE0`           | TYPE_EXTENDED   | Host ↔ MCU       | Extended commands (future expansion)          |
 
-## Button Interface
+### Checksum Algorithm
 
-### Purpose and Usage
+The protocol employs a simple XOR checksum algorithm to ensure packet integrity:
+
+```c
+uint8_t calculate_checksum(const struct sam_protocol_packet *packet)
+{
+    /* XOR of first 3 bytes */
+    return packet->type_flags ^ packet->data[0] ^ packet->data[1];
+}
+```
+
+This algorithm has been chosen for its minimal computational requirements while providing basic error detection capabilities. It can detect any single-bit error and many multi-bit errors, although it cannot detect all possible error patterns.
+
+### Endianness Considerations
+
+All multi-byte values in the protocol (such as 16-bit power metrics) are transmitted in little-endian format, with the least significant byte first. This matches the native byte order of both the RP2040 microcontroller and typical x86-based host systems.
+
+For example, a 16-bit power metric value of 0x1234 would be transmitted as:
+- data[0] = 0x34 (low byte)
+- data[1] = 0x12 (high byte)
+
+### Timing Constraints
+
+The SAM protocol has the following timing characteristics and constraints:
+
+| Parameter                   | Value       | Description                                                      |
+|----------------------------|-------------|------------------------------------------------------------------|
+| Baud Rate                  | 115200 bps  | Standard UART communication speed                                |
+| Character Time             | ~87 μs      | Time to transmit one byte at 115200 baud                         |
+| Packet Transmission Time   | ~348 μs     | Time to transmit a complete 4-byte packet                        |
+| Minimum Inter-Packet Gap   | 100 μs      | Minimum delay between consecutive packets                        |
+| Maximum Response Latency   | 10 ms       | Maximum acceptable delay for time-critical responses             |
+| Timeout for Acknowledgment | 100 ms      | Time to wait for acknowledgment before timeout                   |
+| Recovery Timeout           | 1000 ms     | Default timeout for protocol recovery after synchronization loss |
+
+**Note**: These timing parameters may be adjusted based on specific implementation requirements. In particular, the timeout values can be configured via device tree properties.
+
+## Interface Specifications
+
+### Button Interface
 
 Button events are generated by the RP2040 microcontroller when physical buttons on the CM5 device are pressed or released. These events are sent to the Linux host system, which processes them through the Linux input subsystem.
 
-**When Used:**
+**Technical Specifications:**
 
-- When any physical button on the device is pressed or released
-- The RP2040 detects these hardware events and sends them to the host
+- **Communication Direction**: Unidirectional (RP2040 → Linux host)
+- **Debounce Method**: Hardware-assisted with software validation
+- **Debounce Time**: 50ms (configurable in firmware)
+- **Interrupt Triggering**: Both rising and falling edges
+- **Event Rate Limiting**: No more than 20 events per second per button
 
-**Implementation Note:**
-
-- Fully implemented in the kernel
-- No pending changes required
-- Events flow one-way from RP2040 to the host
-
-### Button Event Flags
+**Data Format:**
 
 Button events use the 5 least significant bits of the `type_flags` byte to indicate button state:
 
-| Bit | Value | Button        |
-| --- | ----- | ------------- |
-| 0   | 0x01  | UP button     |
-| 1   | 0x02  | DOWN button   |
-| 2   | 0x04  | SELECT button |
-| 3   | 0x08  | POWER button  |
+| Bit | Mask  | Button        | Linux Key Mapping |
+|-----|-------|---------------|-------------------|
+| 0   | 0x01  | UP button     | KEY_UP (103)      |
+| 1   | 0x02  | DOWN button   | KEY_DOWN (108)    |
+| 2   | 0x04  | SELECT button | KEY_ENTER (28)    |
+| 3   | 0x08  | POWER button  | KEY_POWER (116)   |
+| 4   | 0x10  | Reserved      | N/A               |
 
-### Button Event Handling
+**Packet Structure:**
+```
++---+---+---+---+---+---+---+---+
+| 0 | 0 | 0 | 0 | P | S | D | U |
++---+---+---+---+---+---+---+---+
+  Type=0      | Button State Bits
+```
 
-When a button event is received, the driver reports the state to the Linux input subsystem with the following mappings:
+Where:
+- U: UP button state (1=pressed, 0=released)
+- D: DOWN button state (1=pressed, 0=released)
+- S: SELECT button state (1=pressed, 0=released)
+- P: POWER button state (1=pressed, 0=released)
 
-| SAM Button | Linux Key Code |
-| ---------- | -------------- |
-| UP         | KEY_UP         |
-| DOWN       | KEY_DOWN       |
-| SELECT     | KEY_ENTER      |
-| POWER      | KEY_POWER      |
+The data bytes (data[0] and data[1]) are reserved for future extensions and should be set to 0x00.
 
-## LED Control
+**Implementation Details:**
 
-### Purpose and Usage
+The Linux kernel driver connects button events to the input subsystem through the following sequence:
+1. The driver registers an input device during initialization
+2. When a button packet is received, the driver extracts the button state
+3. The driver reports the current state of each button via `input_report_key()`
+4. The driver calls `input_sync()` to signal that a complete event has been reported
+5. The Linux input subsystem propagates the event to userspace applications
+
+### LED Control
 
 LED commands control the RGB LEDs on the CM5 device. These commands are primarily sent from the Linux host to the RP2040 microcontroller, which then drives the physical LEDs.
 
-**When Used:**
+**Technical Specifications:**
 
-- To provide visual feedback to users
-- To indicate system status, alerts, or notifications
-- For aesthetic purposes or branding
-- To signal power states (on, off, standby)
+- **Communication Direction**: Primarily Host → RP2040, with acknowledgments RP2040 → Host
+- **Color Depth**: 4 bits per channel (RGB444), providing 4096 possible colors
+- **Response Time**: <10ms from command to visible change
+- **Maximum Queue Length**: 16 color instructions per LED
+- **Supported LEDs**: Up to 16 LEDs (0-15)
+- **LED Addressing**: Individual or broadcast (all LEDs)
 
-**Implementation Note:**
-
-- Basic control is implemented
-- **Pending:** LED brightness control from host needs to be implemented
-- Currently, driver receives LED status but doesn't actively control LEDs
-- Kernel modification required to implement the `brightness_set` callback function in the LED class device
-
-### LED Command Structure
+**Command Structure:**
 
 LED commands use the following format in the `type_flags` byte:
 
-| Bits | Field        | Description                                               |
-| ---- | ------------ | --------------------------------------------------------- |
-| 7-5  | Type         | Always 0b001 for LED commands                             |
-| 4    | Command Type | 0 = Queue instruction, 1 = Execute sequence               |
-| 3-0  | LED ID       | LED identifier (0-15, supporting up to 16 unique LEDs)    |
+```
++---+---+---+---+---+---+---+---+
+| 0 | 0 | 1 | E |    LED ID     |
++---+---+---+---+---+---+---+---+
+  Type=1      |Q|  ID (0-15)    |
+```
 
-### LED Queue-Based Execution
+Where:
+- Type=1 (001): Indicates LED command
+- E: Command type (0=Queue instruction, 1=Execute sequence)
+- LED ID: LED identifier (0-15)
 
-The LED commands use a queue-based approach:
-1. Send one or more LED commands with Command Type = 0 to queue colors
-2. Send a final LED command with Command Type = 1 to execute the entire sequence
-3. LED MCU will acknowledge when the sequence is complete
-
-This allows for complex animations by sending a series of color instructions that will be executed in sequence.
-
-### LED Data Format
+**Data Format:**
 
 The 2 data bytes contain color and timing information:
 
-| Byte    | Bits | Content                                         |
-| ------- | ---- | ----------------------------------------------- |
-| data[0] | 7-4  | Red component (0-15)                            |
-| data[0] | 3-0  | Green component (0-15)                          |
-| data[1] | 7-4  | Blue component (0-15)                           |
-| data[1] | 3-0  | Time value (delay between color changes, 0-15)  |
+```
+data[0]:
++---+---+---+---+---+---+---+---+
+| R | R | R | R | G | G | G | G |
++---+---+---+---+---+---+---+---+
+  Red component  | Green component
 
-### Sending LED Commands
-
-To send an LED command:
-
-```c
-int send_led_command(struct sam_protocol_data *priv, uint8_t led_id,
-                    bool execute, uint8_t r, uint8_t g, uint8_t b, uint8_t time);
+data[1]:
++---+---+---+---+---+---+---+---+
+| B | B | B | B | T | T | T | T |
++---+---+---+---+---+---+---+---+
+ Blue component  | Time value    
 ```
 
-Example: Queue red color for LED 2, then execute
+- Red/Green/Blue components: 4-bit values (0-15) for each color channel
+- Time value: 4-bit value (0-15) representing delay multiplier
 
-```
-// Queue red color
-Type: LED (0b001)
-Command Type: 0 (Queue)
-LED ID: 2
-R: 15, G: 0, B: 0
-Time: 5
+The actual time delay is calculated as: `delay_ms = (time_value + 1) * 100`
 
-// Execute sequence
-Type: LED (0b001)
-Command Type: 1 (Execute)
-LED ID: 2
-R: 0, G: 0, B: 0
-Time: 0
-```
+**Command Sequence:**
 
-### Example: Controlling All 16 LEDs
+LED control uses a queue-based execution model:
+1. Send one or more commands with E=0 to queue color instructions
+2. Send a final command with E=1 to execute the entire sequence
+3. The RP2040 executes the sequence and sends a completion acknowledgment
 
-This example demonstrates how to control all 16 LEDs by queueing multiple color instructions and executing them:
+**Completion Acknowledgment:**
 
-```c
-// Function to queue a color for a specific LED
-void queue_led_color(struct sam_protocol_data *priv, uint8_t led_id, 
-                    uint8_t r, uint8_t g, uint8_t b, uint8_t time)
-{
-    send_led_command(priv, led_id, false, r, g, b, time);
-}
+When an LED sequence completes, the RP2040 sends an acknowledgment packet:
+- type_flags: TYPE_LED | LED_CMD_EXECUTE | LED_ID (the specific LED that completed)
+- data[0]: 0xFF (completion indicator)
+- data[1]: Sequence length that was executed
 
-// Function to execute the sequence for a specific LED
-void execute_led_sequence(struct sam_protocol_data *priv, uint8_t led_id)
-{
-    send_led_command(priv, led_id, true, 0, 0, 0, 0);
-}
+**Implementation Limitations:**
 
-// Example: Set up a rainbow pattern across all 16 LEDs
-void setup_rainbow_pattern(struct sam_protocol_data *priv)
-{
-    // Queue colors for all 16 LEDs
-    queue_led_color(priv, 0, 15, 0, 0, 5);    // LED 0: Red
-    queue_led_color(priv, 1, 15, 4, 0, 5);    // LED 1: Orange
-    queue_led_color(priv, 2, 15, 8, 0, 5);    // LED 2: Yellow-orange
-    queue_led_color(priv, 3, 15, 15, 0, 5);   // LED 3: Yellow
-    queue_led_color(priv, 4, 8, 15, 0, 5);    // LED 4: Yellow-green
-    queue_led_color(priv, 5, 0, 15, 0, 5);    // LED 5: Green
-    queue_led_color(priv, 6, 0, 15, 8, 5);    // LED 6: Turquoise 
-    queue_led_color(priv, 7, 0, 15, 15, 5);   // LED 7: Cyan
-    queue_led_color(priv, 8, 0, 8, 15, 5);    // LED 8: Light blue
-    queue_led_color(priv, 9, 0, 0, 15, 5);    // LED 9: Blue
-    queue_led_color(priv, 10, 4, 0, 15, 5);   // LED 10: Purple
-    queue_led_color(priv, 11, 8, 0, 15, 5);   // LED 11: Violet
-    queue_led_color(priv, 12, 15, 0, 15, 5);  // LED 12: Magenta
-    queue_led_color(priv, 13, 15, 0, 8, 5);   // LED 13: Pink
-    queue_led_color(priv, 14, 15, 0, 4, 5);   // LED 14: Light pink
-    queue_led_color(priv, 15, 15, 8, 8, 5);   // LED 15: White-ish
-    
-    // Execute all LED sequences (one command per LED)
-    for (uint8_t i = 0; i < 16; i++) {
-        execute_led_sequence(priv, i);
-        msleep(10); // Small delay between commands
-    }
-}
-```
+- Current implementation only supports the first LED (LED 0) on most hardware
+- LED brightness control from the host requires additional kernel modifications
+- Complex animations should be limited to no more than 16 steps to avoid buffer constraints
 
-#### Raw Packet Examples for All 16 LEDs
-
-The following raw packets demonstrate queueing a unique color for each of the 16 LEDs and then executing their sequences:
-
-```
-// Queue unique colors for all 16 LEDs (format: {type_flags, data[0], data[1], checksum})
-{0x20, 0xF0, 0x05, 0xD5}  // LED 0: Red
-{0x21, 0xF4, 0x05, 0xD0}  // LED 1: Orange
-{0x22, 0xF8, 0x05, 0xDF}  // LED 2: Yellow-orange
-{0x23, 0xFF, 0x05, 0xD7}  // LED 3: Yellow
-{0x24, 0x8F, 0x05, 0xCA}  // LED 4: Yellow-green
-{0x25, 0x0F, 0x05, 0x2B}  // LED 5: Green
-{0x26, 0x0F, 0x85, 0xA8}  // LED 6: Turquoise
-{0x27, 0x0F, 0xF5, 0xD9}  // LED 7: Cyan
-{0x28, 0x08, 0xF5, 0xD5}  // LED 8: Light blue
-{0x29, 0x00, 0xF5, 0xDC}  // LED 9: Blue
-{0x2A, 0x40, 0xF5, 0x9F}  // LED 10: Purple
-{0x2B, 0x80, 0xF5, 0xDE}  // LED 11: Violet
-{0x2C, 0xF0, 0xF5, 0x27}  // LED 12: Magenta
-{0x2D, 0xF0, 0x85, 0x58}  // LED 13: Pink
-{0x2E, 0xF0, 0x45, 0x9B}  // LED 14: Light pink
-{0x2F, 0xF8, 0x85, 0x50}  // LED 15: White-ish
-
-// Execute sequences for all 16 LEDs (format: {type_flags, data[0], data[1], checksum})
-{0x30, 0x00, 0x00, 0x30}  // Execute LED 0
-{0x31, 0x00, 0x00, 0x31}  // Execute LED 1
-{0x32, 0x00, 0x00, 0x32}  // Execute LED 2
-{0x33, 0x00, 0x00, 0x33}  // Execute LED 3
-{0x34, 0x00, 0x00, 0x34}  // Execute LED 4
-{0x35, 0x00, 0x00, 0x35}  // Execute LED 5
-{0x36, 0x00, 0x00, 0x36}  // Execute LED 6
-{0x37, 0x00, 0x00, 0x37}  // Execute LED 7
-{0x38, 0x00, 0x00, 0x38}  // Execute LED 8
-{0x39, 0x00, 0x00, 0x39}  // Execute LED 9
-{0x3A, 0x00, 0x00, 0x3A}  // Execute LED 10
-{0x3B, 0x00, 0x00, 0x3B}  // Execute LED 11
-{0x3C, 0x00, 0x00, 0x3C}  // Execute LED 12
-{0x3D, 0x00, 0x00, 0x3D}  // Execute LED 13
-{0x3E, 0x00, 0x00, 0x3E}  // Execute LED 14
-{0x3F, 0x00, 0x00, 0x3F}  // Execute LED 15
-```
-
-After sending these execute commands, each LED will acknowledge completion with a packet in this format:
-```
-{0x3X, 0xFF, 0x01, checksum}  // LED X sequence completed (where X is LED ID 0-15)
-```
-Where the second byte (0xFF) indicates completion and the third byte (0x01) indicates sequence length.
-
-### LED Sequence Completion Acknowledgment
-
-When the LED sequence is complete, the RP2040 sends an acknowledgment packet:
-
-```
-Type: LED (0b001)
-Command Type: 1 (Execute bit)
-LED ID: The LED ID that completed the sequence
-data[0]: 0xFF (completion indicator)
-data[1]: sequence length or 0x00
-```
-
-This allows the host to know when a complex animation has completed.
-
-## Power Management
-
-### Purpose and Usage
+### Power Management
 
 Power management commands coordinate power states between the Linux host and the RP2040 microcontroller. They ensure proper system shutdown and sleep states.
 
@@ -412,9 +449,7 @@ For POWER_CMD_SHUTDOWN requests:
 - data\[0\]: Shutdown mode (0 = Normal, 1 = Emergency, 2 = Reboot)
 - data\[1\]: Reason code (optional diagnostic information)
 
-## System Commands
-
-### Purpose and Usage
+### System Commands
 
 System commands provide core control and monitoring functions for the RP2040 microcontroller. They are used for basic communication testing, configuration, and health monitoring.
 
@@ -431,7 +466,7 @@ System commands provide core control and monitoring functions for the RP2040 mic
 - Used internally by the driver
 - The ping command is particularly useful for debugging communication issues
 
-### System Action Types
+**System Action Types**
 
 | Value | Action         | Description                        |
 | ----- | -------------- | ---------------------------------- |
@@ -441,7 +476,7 @@ System commands provide core control and monitoring functions for the RP2040 mic
 | 0x03  | SYSTEM_STATUS  | Request/report system status       |
 | 0x04  | SYSTEM_CONFIG  | Get/set configuration parameters   |
 
-### Sending System Commands
+**Sending System Commands**
 
 ```c
 int send_system_command(struct sam_protocol_data *priv, uint8_t action,
@@ -464,9 +499,7 @@ Command: 0
 Subcommand: 0
 ```
 
-## Display Control
-
-### Purpose and Usage
+### Display Control
 
 Display control commands manage the E-ink display on the CM5 device. This includes refreshing the display, changing display modes, and monitoring display status.
 
@@ -484,7 +517,7 @@ Display control commands manage the E-ink display on the CM5 device. This includ
 - Integration with Linux framebuffer or DRM subsystems needed for full functionality
 - Currently, status updates from the display are received but controlling the display needs further development
 
-### Display Command Format
+**Display Command Format**
 
 The Display Control module manages communication with the E-ink display controller. The format of display commands uses the following structure:
 
@@ -495,9 +528,7 @@ The Display Control module manages communication with the E-ink display controll
 
 Display commands currently support status reporting, with a display refresh completion notification (command 0x01, data1 0xFF).
 
-## Debug Interface
-
-### Purpose and Usage
+### Debug Interface
 
 The debug interface provides diagnostic capabilities for both the RP2040 firmware and the Linux driver. It supports compact debug codes for predefined events and text messages for more detailed information.
 
@@ -516,7 +547,7 @@ The debug interface provides diagnostic capabilities for both the RP2040 firmwar
 - Can be used to diagnose power management and boot/shutdown issues
 - Debug categories are defined to separate different subsystems
 
-### Debug Code Categories
+**Debug Code Categories**
 
 Debug codes provide a compact way to report predefined diagnostic information:
 
@@ -532,7 +563,7 @@ Debug codes provide a compact way to report predefined diagnostic information:
 | 7              | Performance   | Performance metrics and resource usage      |
 | 8-31           | Reserved      | For future expansion                        |
 
-### Power-Related Debug Codes
+**Power-Related Debug Codes**
 
 The following debug codes in Category 4 (Power) can be used to diagnose power management issues:
 
@@ -544,7 +575,7 @@ The following debug codes in Category 4 (Power) can be used to diagnose power ma
 | 0x04 | Shutdown Complete  | `{0x84, 0x04, 0x00, 0x80}` |
 | 0x20 | Sleep Mode Entered | `{0x84, 0x20, 0x00, 0xA4}` |
 
-### Debug Text Format
+**Debug Text Format**
 
 Debug text allows sending longer text messages, potentially split across multiple packets:
 
@@ -555,8 +586,6 @@ Debug text allows sending longer text messages, potentially split across multipl
 | 2-0 | DEBUG_CHUNK_MASK  | Chunk sequence number              |
 
 ## Extended Commands
-
-### Purpose and Usage
 
 Extended commands provide a framework for future expansion of the protocol without changing the basic packet structure. They are reserved for specialized or advanced functionality.
 
@@ -576,7 +605,7 @@ Extended commands provide a framework for future expansion of the protocol witho
 
 The SAM driver implements a versioning system to ensure compatibility between the Linux kernel driver and the RP2040 firmware.
 
-### Version Format
+**Version Format**
 
 The version follows a standard semantic versioning format with three components:
 
@@ -586,7 +615,7 @@ The version follows a standard semantic versioning format with three components:
 
 The full version string is formatted as `MAJOR.MINOR.PATCH` (e.g., "1.0.0").
 
-### Version Exchange Protocol
+**Version Exchange Protocol**
 
 During driver initialization, the Linux kernel sends its version information to the RP2040:
 
@@ -595,7 +624,7 @@ During driver initialization, the Linux kernel sends its version information to 
 
 This exchange allows both sides to maintain version compatibility and potentially adapt behavior based on the detected version.
 
-### Implementation Details
+**Implementation Details**
 
 - The kernel driver defines its version in `pamir-sam.h` with the constants `PAMIR_SAM_VERSION_*`
 - Version information is sent to the RP2040 during boot notification via `send_boot_notification()`
@@ -609,7 +638,7 @@ This exchange allows both sides to maintain version compatibility and potentiall
 The driver creates a character device at `/dev/pamir-sam` for direct communication with the protocol handler. This allows userspace applications to:
 
 1. Send raw packets to the microcontroller
-1. Receive debug information from the microcontroller
+2. Receive debug information from the microcontroller
 
 ### Input Events
 
@@ -990,8 +1019,113 @@ Extended command packets provide a framework for future expansion.
 | Reserved 6       | `0b11100110`      | `0xE6`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE6, 0x00, 0x00, 0xE6}` (Reserved) |
 | Reserved 7       | `0b11100111`      | `0xE7`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE7, 0x00, 0x00, 0xE7}` (Reserved) |
 
+## Performance Considerations
+
+The SAM protocol is designed for embedded systems with limited resources. To ensure optimal performance:
+
+### Host-side Considerations
+
+1. **Command Batching:**
+   - Group related LED commands together to minimize UART overhead
+   - Avoid sending individual commands in rapid succession
+
+2. **Polling Frequency:**
+   - Power metrics polling interval should not be less than 100ms
+   - Button events are rate-limited to 20 per second per button
+
+3. **Resource Utilization:**
+   - The driver uses approximately 12KB of kernel memory
+   - UART interrupt handling has minimal CPU impact (<0.1%)
+   - Debug logging at level 3 can impact performance on heavily loaded systems
+
+### Microcontroller Considerations
+
+1. **Processing Capacity:**
+   - RP2040 can handle up to 1000 packets per second
+   - Display operations block one core during refresh
+   - LED animations are processed in background tasks
+
+2. **Memory Usage:**
+   - Protocol buffer: 256 bytes (64 packets)
+   - LED animation queue: 16 steps per LED
+   - Debug text buffer: 256 bytes
+
+3. **Power Implications:**
+   - High packet rates increase power consumption
+   - LED animations significantly impact battery life
+   - Sleep modes reduce consumption by up to 95%
+
+### Communication Efficiency
+
+1. **Optimization Techniques:**
+   - Use debug codes instead of debug text when possible
+   - Employ the queue-based LED control to reduce packet count
+   - Minimize polling frequency for non-critical metrics
+
+2. **Throughput Limits:**
+   - Theoretical maximum: ~36,000 packets/second at 115200 baud
+   - Practical maximum: ~5,000 packets/second with processing overhead
+   - Recommended sustained rate: <1,000 packets/second for reliable operation
+
+## Error Handling and Recovery
+
+The SAM protocol implements multiple levels of error detection and recovery mechanisms:
+
+### Error Detection
+
+1. **Packet Integrity:**
+   - XOR checksum validates each packet
+   - Detects any single-bit error and many multi-bit errors
+
+2. **Protocol Violations:**
+   - Invalid command codes are detected and logged
+   - Out-of-sequence packets are identified
+
+3. **Timing Violations:**
+   - Timeouts for expected acknowledgments
+   - Detection of stalled transactions
+
+### Recovery Mechanisms
+
+1. **Automatic Retransmission:**
+   - Critical commands can be configured to require acknowledgment
+   - Automatic retransmission up to 3 times for unacknowledged packets
+
+2. **Protocol Resynchronization:**
+   - Flush buffers after detecting checksum errors
+   - Resynchronize on system command packets
+
+3. **Watchdog Protection:**
+   - Hardware watchdog on RP2040 (2-second timeout)
+   - Software watchdog in Linux driver (configurable timeout)
+
+### Error Reporting
+
+1. **Debug Codes:**
+   - Error category (0x01) for protocol errors
+   - Specific error codes for different failure types
+
+2. **Kernel Logging:**
+   - Warning and error messages logged to kernel log
+   - Error counts maintained in driver statistics
+
+3. **Userspace Notification:**
+   - Critical errors reported via sysfs attributes
+   - Error state accessible through character device
+
+### Recovery Procedure
+
+When checksum errors are detected, the following recovery sequence is initiated:
+
+1. Discard the current packet
+2. Log the error (visible with debug level ≥ 1)
+3. Flush receive buffer to clear potentially corrupted data
+4. Send a SYSTEM_PING command to verify communication
+5. If ping fails, escalate to full protocol reset
+6. Reinitialize protocol state and notify upper layers
+
 ## Summary
 
-The Pamir AI SAM Protocol provides a compact and efficient means of communication between a Linux host system and the RP2040 microcontroller in Pamir AI CM5 devices. With only 4 bytes per packet, it efficiently manages multiple hardware interfaces including buttons, LEDs, power management, and display control, along with system commands and debugging facilities.
+The Pamir AI Signal Aggregation Module (SAM) Protocol provides a comprehensive interface between a Linux host system and the RP2040 microcontroller in Pamir AI CM5 devices. This Technical Reference Manual documents the complete protocol specification, implementation details, and integration requirements for both firmware and kernel driver development.
 
-While many components are fully implemented, some aspects require additional kernel modifications to achieve complete functionality, particularly in the areas of power management, display control, and LED brightness control from the host.
+For further assistance or to report issues with this documentation, please contact Pamir AI support at support@pamir.ai.

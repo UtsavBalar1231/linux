@@ -81,34 +81,6 @@ int send_packet(struct sam_protocol_data *priv,
 }
 
 /**
- * send_led_command() - Send LED control command
- * @priv: Private driver data
- * @mode: LED mode (static, blink, etc.)
- * @r: Red component (0-15)
- * @g: Green component (0-15)
- * @b: Blue component (0-15)
- * @value: Brightness or animation parameter
- *
- * Send a command to control the LED.
- *
- * Return: 0 on success, negative error code on failure
- */
-int send_led_command(struct sam_protocol_data *priv, uint8_t mode,
-		     uint8_t r, uint8_t g, uint8_t b, uint8_t value)
-{
-	struct sam_protocol_packet packet;
-
-	dev_dbg(&priv->serdev->dev, "Sending LED command: mode=0x%02x, r=%u, g=%u, b=%u, value=%u\n",
-	     mode, r, g, b, value);
-
-	packet.type_flags = TYPE_LED | mode;
-	packet.data[0] = ((r & 0x0F) << 4) | (g & 0x0F);
-	packet.data[1] = ((b & 0x0F) << 4) | (value & 0x0F);
-
-	return send_packet(priv, &packet);
-}
-
-/**
  * send_system_command() - Send system control command
  * @priv: Private driver data
  * @action: System action (ping, reset, etc.)
@@ -197,7 +169,7 @@ void process_packet(struct sam_protocol_data *priv,
 		process_system_packet(priv, packet);
 		break;
 
-	case TYPE_RESERVED:
+	case TYPE_EXTENDED:
 		dev_dbg(&priv->serdev->dev, "Processing extended packet\n");
 		process_extended_packet(priv, packet);
 		break;

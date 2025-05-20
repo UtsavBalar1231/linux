@@ -50,7 +50,7 @@
 #define TYPE_DEBUG_CODE 0x80  /* 0b100xxxxx */
 #define TYPE_DEBUG_TEXT 0xA0  /* 0b101xxxxx */
 #define TYPE_SYSTEM     0xC0  /* 0b110xxxxx */
-#define TYPE_RESERVED   0xE0  /* 0b111xxxxx */
+#define TYPE_EXTENDED   0xE0  /* 0b111xxxxx */
 #define TYPE_MASK       0xE0  /* 0b11100000 */
 
 /* Button event flags (5 least significant bits) */
