@@ -168,7 +168,6 @@ Implementation Notes:
 For complete documentation, see the README.md file in the Linux driver.
 """
 
-import machine
 import _thread
 
 try:
@@ -817,7 +816,7 @@ class PamirProtocol:
         """
         extended_cmd = packet[0] & 0x1F
         data1 = packet[1]
-        data2 = packet[2]
+        _ = packet[2]
 
         if self.debug:
             print(f"Extended packet received: {[hex(b) for b in packet]}")
