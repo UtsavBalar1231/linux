@@ -12,6 +12,17 @@ commands.
 The protocol uses a fixed-size 4-byte packet format with checksum validation
 to ensure reliable communication.
 
+Protocol Features:
+----------------
+- Button input reporting with debounce
+- LED control with animation and sequences
+- Power management, including boot/shutdown notifications
+- Poll-based power metrics reporting (current, voltage, temperature, battery)
+- E-ink display status and control
+- Version exchange for compatibility
+- Debug logging via codes and text messages
+- System commands for core functionality
+
 Packet Structure:
 ----------------
 Each packet is exactly 4 bytes:
@@ -29,7 +40,7 @@ Message Types (3 most significant bits of Byte 0):
 0b100 (0x80): Debug codes        - System diagnostics and errors
 0b101 (0xA0): Debug text         - Debug text messages (multi-packet)
 0b110 (0xC0): System commands    - System control and status
-0b111 (0xE0): Extended commands  - Reserved for future expansion
+0b111 (0xE0): Extended commands  - Version and future features
 
 Button Events (TYPE_BUTTON = 0x00):
 ----------------------------------
@@ -153,10 +164,21 @@ Implementation Notes:
 - Debug text messages split across multiple packets must be reassembled by the receiver
 - LED control uses a queue-based approach to support complex animations
 - Boot and shutdown notifications help coordinate power states between Linux and RP2040
+
+For complete documentation, see the README.md file in the Linux driver.
 """
 
 import machine
 import _thread
+
+try:
+    from version import VERSION_MAJOR, VERSION_MINOR
+except ImportError:
+    # Default values if version module is not available
+    VERSION_MAJOR = 1
+    VERSION_MINOR = 0
+    VERSION_PATCH = 0
+    VERSION_STRING = "1.0.0"
 
 # Protocol definitions
 # Message types (3 most significant bits)
@@ -183,6 +205,7 @@ LED_ID_MASK = 0x0F  # LED identifier mask (0-15)
 LED_COMPLETION = 0xFF  # Value in data[0] indicating sequence completion
 
 # Power commands
+POWER_CMD_MASK = 0xF0 # Mask for power command bits
 POWER_CMD_QUERY = 0x00  # Query current power status
 POWER_CMD_SET = 0x10  # Set power state (boot notification)
 POWER_CMD_SLEEP = 0x20  # Enter sleep mode
@@ -259,6 +282,9 @@ class PamirProtocol:
         # Power state tracking
         self.power_state = POWER_STATE_OFF
         self.linux_booted = False
+
+        # Host version tracking
+        self.host_version = {"major": 0, "minor": 0, "patch": 0, "string": "0.0.0"}
 
         # Callback handlers for different packet types
         self.handlers = {
@@ -570,7 +596,7 @@ class PamirProtocol:
 
     def request_power_metrics(self):
         """Request power metrics from firmware
-        
+
         Send a request to trigger the firmware to send current power metrics
         """
         self.send_packet(TYPE_POWER | POWER_CMD_REQUEST_METRICS, 0x00, 0x00)
@@ -726,7 +752,7 @@ class PamirProtocol:
 
             # Debug code: Shutdown notification received
             self.send_debug_code(DEBUG_CAT_POWER, POWER_CMD_SHUTDOWN, data1)
-            
+
         elif command == POWER_CMD_REQUEST_METRICS:
             # Linux is requesting power metrics - handler in main.py will respond
             if self.debug:
@@ -753,10 +779,22 @@ class PamirProtocol:
             # Reset logic would go here
 
         elif action == SYSTEM_VERSION:
-            # Send version information
-            major = 1
-            minor = 0
-            self.send_version_info(major, minor)
+            # Receive version information from host
+            if not packet[1] == 0 or not packet[2] == 0:
+                # This is incoming version information from host
+                self.host_version["major"] = data1
+                self.host_version["minor"] = data2
+                self.host_version["string"] = (
+                    f"{data1}.{data2}.{self.host_version['patch']}"
+                )
+                if self.debug:
+                    print(f"Received host version: {self.host_version['string']}")
+
+                # Acknowledge receipt
+                self.send_system_command(SYSTEM_VERSION, data1, data2)
+            else:
+                # This is a version request from host, respond with our version
+                self.send_version_info(VERSION_MAJOR, VERSION_MINOR)
 
         elif action == SYSTEM_STATUS:
             # Send system status response
@@ -777,12 +815,31 @@ class PamirProtocol:
         Args:
             packet: Received packet
         """
-        # Extended commands are reserved for future use
+        extended_cmd = packet[0] & 0x1F
+        data1 = packet[1]
+        data2 = packet[2]
+
         if self.debug:
             print(f"Extended packet received: {[hex(b) for b in packet]}")
 
-        # Send a generic acknowledgment for now
-        self.send_packet(TYPE_EXTENDED | (packet[0] & 0x1F), 0x00, 0x00)
+        if extended_cmd == 0x01:  # Extended version info
+            # Store patch version
+            self.host_version["patch"] = data1
+            # Update complete version string
+            self.host_version["string"] = (
+                f"{self.host_version['major']}.{self.host_version['minor']}.{data1}"
+            )
+
+            if self.debug:
+                print(f"Updated host version: {self.host_version['string']}")
+
+            # Send acknowledgment
+            self.send_packet(
+                TYPE_EXTENDED | extended_cmd, data1, 0x01
+            )  # ACK with original data
+        else:
+            # Send a generic acknowledgment for now
+            self.send_packet(TYPE_EXTENDED | (packet[0] & 0x1F), 0x00, 0x00)
 
     def check_uart(self):
         """Check for and process any available UART data

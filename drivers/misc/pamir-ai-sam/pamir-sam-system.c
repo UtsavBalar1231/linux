@@ -123,3 +123,24 @@ void process_extended_packet(struct sam_protocol_data *priv,
 	if (priv->config.ack_required)
 		send_system_command(priv, SYSTEM_PING, 0, 0);
 }
+
+/**
+ * send_extended_version_info() - Send extended version information
+ * @priv: Private driver data
+ *
+ * Send additional version information including the patch version.
+ * This is called after the basic version info to provide more details.
+ *
+ * Return: 0 on success, negative error code on failure
+ */
+int send_extended_version_info(struct sam_protocol_data *priv)
+{
+	/* Use extended command protocol to send the patch version */
+	struct sam_protocol_packet packet;
+	
+	packet.type_flags = TYPE_EXTENDED | 0x01; /* Extended version info */
+	packet.data[0] = PAMIR_SAM_VERSION_PATCH;
+	packet.data[1] = 0; /* Reserved for future use */
+	
+	return send_packet(priv, &packet);
+}

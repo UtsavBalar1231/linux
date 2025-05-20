@@ -91,6 +91,7 @@ static const struct attribute_group sam_power_group = {
 int send_boot_notification(struct sam_protocol_data *priv)
 {
 	struct sam_protocol_packet packet;
+	int ret;
 
 	dev_info(&priv->serdev->dev, "Sending boot notification to RP2040\n");
 
@@ -98,7 +99,24 @@ int send_boot_notification(struct sam_protocol_data *priv)
 	packet.data[0] = 0x01;  /* Power state = running */
 	packet.data[1] = 0x00;  /* No flags */
 
-	return send_packet(priv, &packet);
+	ret = send_packet(priv, &packet);
+	if (ret)
+		return ret;
+		
+	/* Send version information after boot notification */
+	dev_info(&priv->serdev->dev, "Sending version %s to RP2040\n", 
+		PAMIR_SAM_VERSION_STRING);
+		
+	/* First send version command with major and minor version */
+	ret = send_system_command(priv, SYSTEM_VERSION, 
+		PAMIR_SAM_VERSION_MAJOR, PAMIR_SAM_VERSION_MINOR);
+	if (ret)
+		return ret;
+		
+	/* Then send extended version info with patch version */
+	ret = send_extended_version_info(priv);
+		
+	return ret;
 }
 
 /**

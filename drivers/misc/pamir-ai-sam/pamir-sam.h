@@ -35,7 +35,7 @@
 
 #define DEVICE_NAME "pamir-sam"
 #define MAX_DEVICES 1
-#define RX_BUF_SIZE 64
+#define RX_BUF_SIZE 32
 #define TX_BUF_SIZE 256
 #define DEBUG_QUEUE_SIZE 32
 
@@ -90,6 +90,12 @@
 #define SYSTEM_VERSION     0x02  /* Get system version */
 #define SYSTEM_STATUS      0x03  /* Get system status */
 #define SYSTEM_CONFIG      0x04  /* Get system configuration */
+
+/* Version information */
+#define PAMIR_SAM_VERSION_MAJOR 1
+#define PAMIR_SAM_VERSION_MINOR 0
+#define PAMIR_SAM_VERSION_PATCH 0
+#define PAMIR_SAM_VERSION_STRING "1.0.0"
 
 /**
  * struct sam_protocol_packet - SAM packet structure
@@ -251,6 +257,7 @@ void process_system_packet(struct sam_protocol_data *priv,
 			   const struct sam_protocol_packet *packet);
 void process_extended_packet(struct sam_protocol_data *priv,
 			     const struct sam_protocol_packet *packet);
+int send_extended_version_info(struct sam_protocol_data *priv);
 
 /* Character device interface */
 int setup_char_device(struct sam_protocol_data *priv);

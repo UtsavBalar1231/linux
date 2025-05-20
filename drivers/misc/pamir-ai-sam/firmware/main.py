@@ -1,16 +1,48 @@
-# Author: PamirAI
-# Date: 2025-05-19
-# Version: 0.1.0
-# Description: This is the main program for the RP2040 SAM
+#!/usr/bin/env micropython
+"""
+Pamir AI Signal Aggregation Module (SAM) Firmware
+=================================================
+
+This firmware runs on the RP2040 microcontroller and provides communication
+between the main Linux system and hardware components on Pamir AI devices.
+
+Features:
+--------
+- Button input handling and debounce
+- LED control with animations
+- Power state management (boot/shutdown coordination)
+- Poll-based power metrics reporting
+- E-Ink display controller interface
+- Version information exchange
+- Debug logging via UART
+
+Version Information:
+------------------
+The firmware exchanges version information with the Linux driver during boot:
+1. Linux driver sends its version (major, minor, patch) to the firmware
+2. Firmware stores this for potential compatibility checks
+3. Firmware responds with its own version information
+
+Power Metrics:
+------------
+The firmware supports poll-based power metrics reporting:
+1. Linux driver requests metrics via POWER_CMD_REQUEST_METRICS command
+2. Firmware responds with current, voltage, temperature, and battery info
+3. Linux driver exposes these values through sysfs
+
+Author: PamirAI
+Date: 2025-05-19
+Version: 0.1.0
+"""
 
 # TODO EINK BLOCK CORE 1 from complete if eink broken
 import machine
 import utime
 from eink_driver_sam import einkDSP_SAM
 import _thread
-from machine import WDT
 import neopixel
 from uart_protocol import *
+from version import *
 
 # # Reset PMIC, DO NO REMOVE THIS BLOCK, Covers Non Battery Non Boost Version Board
 # pmic_enable.value(0) # Pull down pin
@@ -24,7 +56,7 @@ LUT_MODE = True  # for LUT mode, set to true for LUT mode
 debounce_time = 50  # Debounce time in milliseconds
 
 
-wdt = WDT(timeout=2000)
+wdt = machine.WDT(timeout=2000)
 # Set up GPIO pins
 selectBTN = machine.Pin(16, machine.Pin.IN, machine.Pin.PULL_DOWN)
 upBTN = machine.Pin(17, machine.Pin.IN, machine.Pin.PULL_DOWN)
@@ -204,7 +236,7 @@ def handle_power_packet(packet):
         # Signal core1 task to stop
         with core1_task_interrupt_lock:
             core1_task_interrupt = True
-            
+
     elif command == POWER_CMD_REQUEST_METRICS:
         debug_print("Received request for power metrics")
         # Send power metrics on demand
@@ -218,7 +250,25 @@ def handle_system_packet(packet):
     if action == SYSTEM_PING:  # SYSTEM_PING
         pamir_protocol.send_ping_response()
     elif action == SYSTEM_VERSION:  # SYSTEM_VERSION
-        pamir_protocol.send_version_info(1, 0)
+        # If this is a version packet with data (not a request)
+        if packet[1] != 0 or packet[2] != 0:
+            # Log version information
+            debug_print(f"Host driver version: {pamir_protocol.host_version['string']}")
+
+            # Check compatibility
+            is_compatible = check_compatibility(
+                (
+                    pamir_protocol.host_version["major"],
+                    pamir_protocol.host_version["minor"],
+                    pamir_protocol.host_version["patch"],
+                )
+            )
+            debug_print(
+                f"Host driver compatibility: {'OK' if is_compatible else 'WARNING'}"
+            )
+        else:
+            # This is a version request - send our firmware version
+            pamir_protocol.send_version_info(VERSION_MAJOR, VERSION_MINOR)
 
 
 def handle_neopixel_sequence(np, data):
@@ -330,10 +380,17 @@ def core1_task():
     # Now handle UART and protocol in a continuous loop
     debug_print("[RP2040 DEBUG] Starting protocol handling on core1\n")
 
+    # Log version information
+    debug_print(f"Pamir AI SAM Firmware v{VERSION_STRING}")
+    log_version_info(debug_print)
+
     # Register handlers for packet types
     pamir_protocol.register_handler(TYPE_LED, handle_led_packet)  # LED handler
     pamir_protocol.register_handler(TYPE_POWER, handle_power_packet)  # Power handler
     pamir_protocol.register_handler(TYPE_SYSTEM, handle_system_packet)  # System handler
+    pamir_protocol.register_handler(
+        TYPE_EXTENDED, handle_extended_packet
+    )  # Extended handler
 
     # UART handling loop
     while True:
@@ -497,6 +554,26 @@ def send_power_metrics():
         pamir_protocol.send_power_battery(75)
         pamir_protocol.send_power_temperature(255)  # 25.5°C
         pamir_protocol.send_power_voltage(3800)
+
+
+# Extended packet handler
+def handle_extended_packet(packet):
+    ext_type = packet[0] & 0x1F
+
+    if ext_type == 0x01:  # Extended version info
+        debug_print(f"Received extended version info: patch={packet[1]}")
+        debug_print(f"Complete host version: {pamir_protocol.host_version['string']}")
+
+        # Log firmware version information
+        log_version_info(debug_print)
+
+        # Here you could perform version-specific initialization if needed
+        if check_compatibility(pamir_protocol.host_version["string"]):
+            # Enable advanced features for compatible host versions
+            debug_print("Host driver supports all firmware features")
+        else:
+            # Fall back to basic functionality for older host versions
+            debug_print("Host driver requires compatibility mode")
 
 
 # Send system initialized debug code

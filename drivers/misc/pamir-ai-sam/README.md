@@ -28,10 +28,10 @@ The following table provides an overview of the implementation status for each m
 | Protocol Core      | Complete                     | Core packet processing functionality is implemented                          |
 | Input Handler      | Complete                     | Button events are fully supported                                            |
 | LED Handler        | Partial                      | Basic control implemented; LED brightness control from host is pending       |
-| Power Manager      | Complete                     | Boot and shutdown notifications implemented with kernel reboot notifier      |
+| Power Manager      | Complete                     | Boot/shutdown notifications and poll-based power metrics implemented         |
 | Display Controller | Minimal                      | Status reporting only; active display control pending                        |
 | Debug Interface    | Complete                     | Both debug codes and text messages fully supported                           |
-| System Commands    | Complete                     | All core system commands are implemented                                     |
+| System Commands    | Complete                     | All core system commands are implemented, including versioning               |
 | Character Device   | Complete                     | Userspace interface is fully functional                                      |
 
 ## Protocol Specification
@@ -347,7 +347,7 @@ Power management commands coordinate power states between the Linux host and the
 
 ### Power Metrics Reporting
 
-The RP2040 microcontroller periodically reports power-related metrics to the Linux host:
+The RP2040 microcontroller reports power-related metrics to the Linux host:
 
 | Metric | Description | Resolution | Range | Packet Format |
 |--------|-------------|------------|-------|---------------|
@@ -360,13 +360,20 @@ All values are sent as 16-bit little-endian integers (low byte first, high byte 
 
 **RP2040 Implementation:**
 - Metrics are read from sensors (or simulated in the reference implementation)
-- Reports are sent every 30 seconds by default when Linux is running
-- Reporting stops during shutdown sequences
+- Reports are sent in response to poll requests from the Linux driver
+- Polling is initiated by the Linux host via the `POWER_CMD_REQUEST_METRICS` command
 
 **Linux Implementation:**
 - Metrics are logged to kernel log (visible via `dmesg`)
 - Values are stored in the driver and exposed via sysfs
 - Available at `/sys/devices/.../power_metrics/`
+- Polling interval is configurable via device tree
+
+**Polling Mechanism:**
+- The Linux driver polls for metrics at configurable intervals (default: 1 second)
+- The polling interval is set via the `power-poll-interval-ms` device tree property
+- Each poll request sends a `POWER_CMD_REQUEST_METRICS` packet (0x80)
+- The RP2040 responds by sending all four metrics sequentially
 
 **Sysfs Attributes:**
 
@@ -564,6 +571,36 @@ Extended commands provide a framework for future expansion of the protocol witho
 - Basic structure implemented
 - Content is currently reserved for future use
 - Requires updates to both firmware and driver when new commands are defined
+
+## Versioning System
+
+The SAM driver implements a versioning system to ensure compatibility between the Linux kernel driver and the RP2040 firmware.
+
+### Version Format
+
+The version follows a standard semantic versioning format with three components:
+
+- **Major Version**: Incremented for incompatible API changes
+- **Minor Version**: Incremented for new functionality in a backward-compatible manner
+- **Patch Version**: Incremented for backward-compatible bug fixes
+
+The full version string is formatted as `MAJOR.MINOR.PATCH` (e.g., "1.0.0").
+
+### Version Exchange Protocol
+
+During driver initialization, the Linux kernel sends its version information to the RP2040:
+
+1. **Basic Version Information**: The driver sends a `SYSTEM_VERSION` packet containing the major and minor version numbers
+2. **Extended Version Information**: The driver follows with an extended packet containing the patch version
+
+This exchange allows both sides to maintain version compatibility and potentially adapt behavior based on the detected version.
+
+### Implementation Details
+
+- The kernel driver defines its version in `pamir-sam.h` with the constants `PAMIR_SAM_VERSION_*`
+- Version information is sent to the RP2040 during boot notification via `send_boot_notification()`
+- The RP2040 firmware maintains a record of the host driver version for potential compatibility checks
+- Both sides can implement version-specific behavior to maintain backward compatibility
 
 ## Userspace Interface
 
@@ -766,13 +803,22 @@ Add the following to your device tree to enable the SAM driver:
 
     pamir_sam: pamir-sam {
         compatible = "pamir-ai,sam";
-        debug-level = <1>;
-        ack-required = <0>;
-        recovery-timeout-ms = <1000>;
-        power-poll-interval-ms = <1000>;  /* Poll power metrics every 1000ms */
+        debug-level = <1>;                /* Optional: 0=off, 1=error, 2=info, 3=verbose */
+        ack-required = <0>;               /* Optional: Whether commands require ACK */
+        recovery-timeout-ms = <1000>;     /* Optional: Recovery timeout in milliseconds */
+        power-poll-interval-ms = <1000>;  /* Optional: Poll power metrics every 1000ms (0 to disable) */
     };
 };
 ```
+
+### Device Tree Properties
+
+| Property               | Type    | Default | Description                                              |
+|------------------------|---------|---------|----------------------------------------------------------|
+| debug-level            | u32     | 0       | Debug level (0=off, 1=error, 2=info, 3=verbose)          |
+| ack-required           | boolean | false   | Whether commands require acknowledgment                  |
+| recovery-timeout-ms    | u32     | 1000    | Timeout for protocol recovery in milliseconds            |
+| power-poll-interval-ms | u32     | 1000    | Interval for polling power metrics (ms, 0 to disable)    |
 
 ## Required Kernel Modifications
 
@@ -864,6 +910,7 @@ Power packets manage power states between the Linux host and RP2040.
 | Deep Sleep         | `0b01100001`      | `0x61`         | `[Delay] [Flags]`    | **Host→MC**: `{0x61, 0x00, 0x00, 0x61}` (Immediate deep sleep) |
 | System Shutdown    | `0b01110000`      | `0x70`         | `[Mode] [Flags]`     | **Host→MC**: `{0x70, 0x00, 0x00, 0x70}` (Normal shutdown)      |
 | Emergency Shutdown | `0b01110001`      | `0x71`         | `[Reason] [Flags]`   | **Host→MC**: `{0x71, 0x01, 0x00, 0x70}` (Thermal shutdown)     |
+| Request Metrics    | `0b10000000`      | `0x80`         | `[0x00] [0x00]`      | **Host→MC**: `{0x80, 0x00, 0x00, 0x80}` (Request all metrics)  |
 
 ### Display Control Packets (TYPE_DISPLAY)
 
@@ -935,7 +982,7 @@ Extended command packets provide a framework for future expansion.
 | Extended Command | Binary Type+Flags | Hex Type+Flags | Data Format     | Example Usage                                              |
 | ---------------- | ----------------- | -------------- | --------------- | ---------------------------------------------------------- |
 | Reserved 0       | `0b11100000`      | `0xE0`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE0, 0x00, 0x00, 0xE0}` (Reserved) |
-| Reserved 1       | `0b11100001`      | `0xE1`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE1, 0x00, 0x00, 0xE1}` (Reserved) |
+| Extended Version | `0b11100001`      | `0xE1`         | `[Patch] [Rsv]` | **Host→MC**: `{0xE1, 0x01, 0x00, 0xE0}` (Patch version 1)  |
 | Reserved 2       | `0b11100010`      | `0xE2`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE2, 0x00, 0x00, 0xE2}` (Reserved) |
 | Reserved 3       | `0b11100011`      | `0xE3`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE3, 0x00, 0x00, 0xE3}` (Reserved) |
 | Reserved 4       | `0b11100100`      | `0xE4`         | `[Cmd] [Param]` | **Host→MC/MC→Host**: `{0xE4, 0x00, 0x00, 0xE4}` (Reserved) |
