@@ -67,11 +67,15 @@
 #define LED_COMPLETION   0xFF  /* Value in data[0] indicating sequence completion */
 
 /* Power management commands */
-#define POWER_CMD_QUERY    0x00
-#define POWER_CMD_SET      0x10
-#define POWER_CMD_SLEEP    0x20
-#define POWER_CMD_SHUTDOWN 0x30
-#define POWER_CMD_MASK     0x30
+#define POWER_CMD_QUERY    0x00  /* Query current power status */
+#define POWER_CMD_SET      0x10  /* Set power state (boot notification) */
+#define POWER_CMD_SLEEP    0x20  /* Enter sleep mode */
+#define POWER_CMD_SHUTDOWN 0x30  /* System shutdown notification */
+#define POWER_CMD_CURRENT  0x40  /* Current draw reporting */
+#define POWER_CMD_BATTERY  0x50  /* Battery state reporting */
+#define POWER_CMD_TEMP     0x60  /* Temperature reporting */
+#define POWER_CMD_VOLTAGE  0x70  /* Voltage reporting */
+#define POWER_CMD_MASK     0xF0  /* Mask for power command bits */
 
 /* Debug text flags */
 #define DEBUG_FIRST_CHUNK  0x10
@@ -116,6 +120,24 @@ struct debug_code_entry {
 };
 
 /**
+ * struct sam_power_metrics - Power-related metrics
+ * @current_ma: Current draw in mA
+ * @battery_pct: Battery state of charge in percentage
+ * @temp_decidegc: Temperature in 0.1°C units
+ * @voltage_mv: Voltage in mV
+ * @last_update_jiffies: Timestamp of last update
+ *
+ * This structure holds power-related metrics reported by the RP2040.
+ */
+struct sam_power_metrics {
+	uint16_t current_ma;
+	uint16_t battery_pct;
+	uint16_t temp_decidegc;
+	uint16_t voltage_mv;
+	unsigned long last_update_jiffies;
+};
+
+/**
  * struct sam_protocol_config - configuration for SAM protocol
  * @debug_level: Current debug level (0-3)
  * @ack_required: Whether commands require acknowledgment
@@ -149,6 +171,7 @@ struct sam_protocol_config {
  * @packet_stats: Statistics for received/processed packets
  * @rx_state: Current state of packet processing state machine
  * @work_queue: Workqueue for deferred processing
+ * @power_metrics: Power-related metrics from RP2040
  *
  * This struct holds the runtime state of the SAM protocol driver.
  */
@@ -176,6 +199,9 @@ struct sam_protocol_data {
 	uint64_t packet_stats[8];  /* Stats per message type */
 	int rx_state;
 	struct workqueue_struct *work_queue;
+	
+	/* Power metrics */
+	struct sam_power_metrics power_metrics;
 };
 
 /* Function declarations */
@@ -186,8 +212,8 @@ int send_packet(struct sam_protocol_data *priv, struct sam_protocol_packet *pack
 void process_packet(struct sam_protocol_data *priv, const struct sam_protocol_packet *packet);
 
 /* Command senders */
-int send_led_command(struct sam_protocol_data *priv, uint8_t mode,
-		     uint8_t r, uint8_t g, uint8_t b, uint8_t value);
+int send_led_command(struct sam_protocol_data *priv, uint8_t led_id,
+		     bool execute, uint8_t r, uint8_t g, uint8_t b, uint8_t time);
 int send_system_command(struct sam_protocol_data *priv, uint8_t action,
 			uint8_t command, uint8_t subcommand);
 

@@ -9,6 +9,76 @@
 #include "pamir-sam.h"
 #include <linux/reboot.h>
 
+/* Sysfs attributes for power metrics */
+static ssize_t current_ma_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct serdev_device *serdev = to_serdev_device(dev);
+	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
+
+	return sprintf(buf, "%u\n", priv->power_metrics.current_ma);
+}
+static DEVICE_ATTR_RO(current_ma);
+
+static ssize_t battery_percent_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct serdev_device *serdev = to_serdev_device(dev);
+	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
+
+	return sprintf(buf, "%u\n", priv->power_metrics.battery_pct);
+}
+static DEVICE_ATTR_RO(battery_percent);
+
+static ssize_t temperature_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct serdev_device *serdev = to_serdev_device(dev);
+	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
+	uint16_t temp = priv->power_metrics.temp_decidegc;
+
+	return sprintf(buf, "%u.%u\n", temp / 10, temp % 10);
+}
+static DEVICE_ATTR_RO(temperature);
+
+static ssize_t voltage_mv_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	struct serdev_device *serdev = to_serdev_device(dev);
+	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
+
+	return sprintf(buf, "%u\n", priv->power_metrics.voltage_mv);
+}
+static DEVICE_ATTR_RO(voltage_mv);
+
+static ssize_t metrics_last_update_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	struct serdev_device *serdev = to_serdev_device(dev);
+	struct sam_protocol_data *priv = serdev_device_get_drvdata(serdev);
+	unsigned long age_ms;
+
+	age_ms = jiffies_to_msecs(jiffies - priv->power_metrics.last_update_jiffies);
+
+	return sprintf(buf, "%lu ms ago\n", age_ms);
+}
+static DEVICE_ATTR_RO(metrics_last_update);
+
+/* Group all power metrics attributes */
+static struct attribute *sam_power_attrs[] = {
+	&dev_attr_current_ma.attr,
+	&dev_attr_battery_percent.attr,
+	&dev_attr_temperature.attr,
+	&dev_attr_voltage_mv.attr,
+	&dev_attr_metrics_last_update.attr,
+	NULL
+};
+
+static const struct attribute_group sam_power_group = {
+	.name = "power_metrics",
+	.attrs = sam_power_attrs,
+};
+
 /**
  * send_boot_notification() - Notify RP2040 that Linux has booted
  * @priv: Private driver data
@@ -66,13 +136,47 @@ void process_power_packet(struct sam_protocol_data *priv,
 {
 	uint8_t cmd = packet->type_flags & POWER_CMD_MASK;
 	uint8_t param = packet->type_flags & 0x0F;
-	__maybe_unused uint8_t data1 = packet->data[0];
-	__maybe_unused uint8_t data2 = packet->data[1];
+	uint8_t data_low = packet->data[0];
+	uint8_t data_high = packet->data[1];
+	uint16_t value = (data_high << 8) | data_low;
 
 	dev_dbg(&priv->serdev->dev,
-	 "Power packet - Cmd: 0x%02x, Param: 0x%02x\n", cmd, param);
+	 "Power packet - Cmd: 0x%02x, Param: 0x%02x, Data: 0x%02x 0x%02x\n", 
+	 cmd, param, data_low, data_high);
 
 	switch (cmd) {
+	case POWER_CMD_CURRENT:
+		/* Current in mA */
+		dev_info(&priv->serdev->dev, "Power current: %u mA\n", value);
+		priv->power_metrics.current_ma = value;
+		priv->power_metrics.last_update_jiffies = jiffies;
+		break;
+
+	case POWER_CMD_BATTERY:
+		/* Battery percentage */
+		if (value > 100)
+			value = 100; /* Clamp to valid percentage */
+		dev_info(&priv->serdev->dev, "Battery charge: %u%%\n", value);
+		priv->power_metrics.battery_pct = value;
+		priv->power_metrics.last_update_jiffies = jiffies;
+		break;
+
+	case POWER_CMD_TEMP:
+		/* Temperature in 0.1°C */
+		dev_info(&priv->serdev->dev, "Temperature: %u.%u°C\n", 
+			value / 10, value % 10);
+		priv->power_metrics.temp_decidegc = value;
+		priv->power_metrics.last_update_jiffies = jiffies;
+		break;
+
+	case POWER_CMD_VOLTAGE:
+		/* Voltage in mV */
+		dev_info(&priv->serdev->dev, "Voltage: %u.%03u V\n", 
+			value / 1000, value % 1000);
+		priv->power_metrics.voltage_mv = value;
+		priv->power_metrics.last_update_jiffies = jiffies;
+		break;
+
 	case POWER_CMD_QUERY:
 		/* RP2040 is querying power status */
 		/* Respond with current power state */
@@ -152,6 +256,22 @@ int register_power_handlers(struct sam_protocol_data *priv)
 		dev_info(&priv->serdev->dev,
 		    "Registered shutdown notification handler\n");
 
+	/* Initialize power metrics */
+	priv->power_metrics.current_ma = 0;
+	priv->power_metrics.battery_pct = 0;
+	priv->power_metrics.temp_decidegc = 0;
+	priv->power_metrics.voltage_mv = 0;
+	priv->power_metrics.last_update_jiffies = jiffies;
+
+	/* Create sysfs interface for power metrics */
+	ret = sysfs_create_group(&priv->serdev->dev.kobj, &sam_power_group);
+	if (ret)
+		dev_warn(&priv->serdev->dev, 
+			"Failed to create power metrics sysfs group: %d\n", ret);
+	else
+		dev_info(&priv->serdev->dev, 
+			"Created power metrics sysfs interface\n");
+
 	return ret;
 }
 
@@ -164,6 +284,9 @@ int register_power_handlers(struct sam_protocol_data *priv)
 void unregister_power_handlers(struct sam_protocol_data *priv)
 {
 	if (g_power_priv) {
+		/* Remove sysfs interface */
+		sysfs_remove_group(&priv->serdev->dev.kobj, &sam_power_group);
+		
 		unregister_reboot_notifier(&sam_reboot_notifier);
 		g_power_priv = NULL;
 		dev_dbg(&priv->serdev->dev,

@@ -297,6 +297,7 @@ Power management commands coordinate power states between the Linux host and the
 - During system boot to notify the RP2040 that the Linux host has booted
 - During system shutdown to notify the RP2040 to prepare for power-off
 - When entering/exiting sleep modes
+- For periodic reporting of power metrics (current, battery, temperature, voltage)
 
 **Implementation Note:**
 
@@ -305,6 +306,7 @@ Power management commands coordinate power states between the Linux host and the
 - Shutdown notification sent automatically during system shutdown via Linux reboot notifier
 - Sleep mode transitions supported for power management
 - RP2040 firmware provides visual feedback for power state transitions
+- Power metrics reported periodically and exposed via sysfs
 
 ### Power Command Types
 
@@ -314,6 +316,10 @@ Power management commands coordinate power states between the Linux host and the
 | 0x10  | POWER_CMD_SET      | Set power state            |
 | 0x20  | POWER_CMD_SLEEP    | Enter sleep mode           |
 | 0x30  | POWER_CMD_SHUTDOWN | Shutdown system            |
+| 0x40  | POWER_CMD_CURRENT  | Current draw reporting     |
+| 0x50  | POWER_CMD_BATTERY  | Battery state reporting    |
+| 0x60  | POWER_CMD_TEMP     | Temperature reporting      |
+| 0x70  | POWER_CMD_VOLTAGE  | Voltage reporting          |
 
 ### Boot and Shutdown Notifications
 
@@ -338,6 +344,47 @@ Power management commands coordinate power states between the Linux host and the
 - Shutdown notification handled by registering a reboot notifier 
 - `sam_reboot_notifier_call()` callback sends the shutdown notification when triggered
 - Separate handlers for normal and emergency shutdown modes
+
+### Power Metrics Reporting
+
+The RP2040 microcontroller periodically reports power-related metrics to the Linux host:
+
+| Metric | Description | Resolution | Range | Packet Format |
+|--------|-------------|------------|-------|---------------|
+| Current | Power draw in mA | 1 mA | 0-65535 mA | `{0x40, low, high, checksum}` |
+| Battery | State of charge | 1% | 0-100% | `{0x50, low, high, checksum}` |
+| Temperature | System temperature | 0.1°C | -3276.8°C to 3276.7°C | `{0x60, low, high, checksum}` |
+| Voltage | System voltage | 1 mV | 0-65535 mV | `{0x70, low, high, checksum}` |
+
+All values are sent as 16-bit little-endian integers (low byte first, high byte second).
+
+**RP2040 Implementation:**
+- Metrics are read from sensors (or simulated in the reference implementation)
+- Reports are sent every 30 seconds by default when Linux is running
+- Reporting stops during shutdown sequences
+
+**Linux Implementation:**
+- Metrics are logged to kernel log (visible via `dmesg`)
+- Values are stored in the driver and exposed via sysfs
+- Available at `/sys/devices/.../power_metrics/`
+
+**Sysfs Attributes:**
+
+| Attribute | Example | Description |
+|-----------|---------|-------------|
+| current_ma | 250 | Current draw in mA |
+| battery_percent | 75 | Battery charge in percent |
+| temperature | 25.5 | Temperature in °C |
+| voltage_mv | 3800 | Voltage in mV |
+| metrics_last_update | 123 ms ago | Time since last update |
+
+To read current values:
+```bash
+cat /sys/devices/platform/serial@*/power_metrics/current_ma
+cat /sys/devices/platform/serial@*/power_metrics/battery_percent
+cat /sys/devices/platform/serial@*/power_metrics/temperature
+cat /sys/devices/platform/serial@*/power_metrics/voltage_mv
+```
 
 ### Power Data Format
 
