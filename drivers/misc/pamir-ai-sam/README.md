@@ -463,9 +463,106 @@ Or if built into the kernel, append to the kernel command line:
 pamir-ai-sam.debug=3
 ```
 
-### Common Issues and Solutions
+### Debugging Button Input Events
 
-#### Communication Issues
+To verify that button events are correctly detected and propagated through the system:
+
+1. **Check if the SAM driver is receiving button events from the RP2040**:
+   ```
+   sudo modprobe pamir-ai-sam debug=3
+   sudo dmesg -w | grep -i "button\|input"
+   ```
+   
+   When you press buttons on the device, you should see debug messages like:
+   ```
+   pamir_sam_protocol: Processing button packet
+   pamir_sam_protocol: Button state: 0x01 (UP button pressed)
+   ```
+
+2. **Verify input device registration**:
+   ```
+   ls -la /dev/input/by-id/ | grep pamir
+   ```
+   
+   You should see a device like:
+   ```
+   lrwxrwxrwx 1 root root 9 Jan  1 00:00 input-pamir-ai-signal-aggregation-module -> ../event5
+   ```
+
+3. **Monitor raw input events directly**:
+   ```
+   sudo apt install evtest
+   sudo evtest /dev/input/by-id/input-pamir-ai-signal-aggregation-module
+   ```
+   
+   Or if the by-id link isn't available, find the device by listing all input devices:
+   ```
+   sudo evtest
+   # Select the "Pamir AI Signal Aggregation Module" from the list
+   ```
+   
+   Then press buttons and verify events are registered.
+
+4. **Check the input mapping**:
+   The driver maps hardware buttons to the following Linux key codes:
+   | Hardware Button | Linux Key Code | Key Code Value |
+   |-----------------|----------------|----------------|
+   | UP              | KEY_UP         | 103            |
+   | DOWN            | KEY_DOWN       | 108            |
+   | SELECT          | KEY_ENTER      | 28             |
+   | POWER           | KEY_POWER      | 116            |
+
+#### Button Troubleshooting
+
+If button events aren't being detected:
+
+1. **Hardware connection issues**:
+   - Verify that the RP2040 is properly connected to the buttons
+   - Check button pin configuration in the RP2040 firmware
+
+2. **Protocol issues**:
+   - Check if button packets are being sent by the RP2040:
+     ```
+     sudo cat /dev/pamir-sam | hexdump -C
+     ```
+     Button packets have type 0x00-0x0F in the first byte
+   
+   - Verify packet checksum is correct (should be XOR of first 3 bytes)
+
+3. **Input subsystem issues**:
+   - Check if input device is created properly:
+     ```
+     grep -i "pamir\|input" /proc/devices
+     ```
+   
+   - Verify input event handling in the kernel:
+     ```
+     grep -i "input" /proc/interrupts
+     ```
+   
+   - Check permissions on input device:
+     ```
+     ls -la /dev/input/event* | grep -i pamir
+     ```
+
+#### Testing Button Events from Userspace
+
+You can simulate button events from userspace for testing:
+
+1. **Find the event device ID**:
+   ```
+   grep -i "pamir" /proc/bus/input/devices
+   ```
+   Note the `Handlers=` line to find the event number (e.g., `event5`)
+
+2. **Simulate button events** using the `evemu-event` tool:
+   ```
+   sudo apt install evemu
+   sudo evemu-event /dev/input/event5 --type EV_KEY --code KEY_UP --value 1   # Press UP
+   sudo evemu-event /dev/input/event5 --type EV_KEY --code KEY_UP --value 0   # Release UP
+   ```
+
+### Communication Issues
 
 For communication problems between the driver and RP2040:
 
